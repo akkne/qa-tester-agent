@@ -17,7 +17,9 @@ public interface IRunRepository
 
     Task<Run?> FindOldestQueuedAsync(CancellationToken cancellationToken);
 
-    Task<Run?> FindOldestRunningAsync(CancellationToken cancellationToken);
+    Task<Run?> FindOldestRunningAsync(DateTimeOffset startedBefore, CancellationToken cancellationToken);
+
+    Task<bool> TryStartAsync(Run run, DateTimeOffset now, CancellationToken cancellationToken);
 
     Task UpdateAsync(Run run, CancellationToken cancellationToken);
 }

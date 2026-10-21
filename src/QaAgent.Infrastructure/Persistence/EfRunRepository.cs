@@ -36,10 +36,12 @@ public sealed class EfRunRepository(RunDbContext dbContext) : IRunRepository
         return record is null ? null : Restore(record);
     }
 
-    public async Task<Run?> FindOldestRunningAsync(CancellationToken cancellationToken)
+    public async Task<Run?> FindOldestRunningAsync(
+        DateTimeOffset startedBefore,
+        CancellationToken cancellationToken)
     {
         RunRecord? record = await dbContext.Runs.AsNoTracking()
-            .Where(run => run.State == nameof(RunState.Running))
+            .Where(run => run.State == nameof(RunState.Running) && run.StartedAt <= startedBefore)
             .OrderBy(run => run.StartedAt)
             .FirstOrDefaultAsync(cancellationToken);
         return record is null ? null : Restore(record);
@@ -47,6 +49,20 @@ public sealed class EfRunRepository(RunDbContext dbContext) : IRunRepository
 
     public Task AddAsync(Run run, CancellationToken cancellationToken) =>
         dbContext.Runs.AddAsync(ToRecord(run), cancellationToken).AsTask();
+
+    public async Task<bool> TryStartAsync(
+        Run run,
+        DateTimeOffset now,
+        CancellationToken cancellationToken)
+    {
+        run.Start(now);
+        int updated = await dbContext.Runs
+            .Where(record => record.Id == run.Id && record.State == nameof(RunState.Queued))
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(record => record.State, nameof(RunState.Running))
+                .SetProperty(record => record.StartedAt, now), cancellationToken);
+        return updated == 1;
+    }
 
     public async Task UpdateAsync(Run run, CancellationToken cancellationToken)
     {

@@ -5,11 +5,16 @@ root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 temporary=$(mktemp -d)
 container_id=''
 host_pid=''
+host_pid_two=''
 
 cleanup() {
   if [[ -n "$host_pid" ]]; then
     kill "$host_pid" 2>/dev/null || true
     wait "$host_pid" 2>/dev/null || true
+  fi
+  if [[ -n "$host_pid_two" ]]; then
+    kill "$host_pid_two" 2>/dev/null || true
+    wait "$host_pid_two" 2>/dev/null || true
   fi
   if [[ -n "$container_id" ]]; then
     docker rm -f "$container_id" >/dev/null 2>&1 || true
@@ -37,6 +42,20 @@ printf 'later\n' > "$repository/later.txt"
 git -C "$repository" add later.txt
 git -C "$repository" commit -qm 'later'
 later_sha=$(git -C "$repository" rev-parse HEAD)
+
+real_git=$(command -v git)
+mkdir -p "$temporary/bin"
+cat > "$temporary/bin/git" <<'EOF'
+#!/usr/bin/env bash
+if [[ "${1:-}" == 'clone' ]]; then
+  printf 'clone\n' >> "$QA_GIT_CLONE_LOG"
+fi
+exec "$QA_REAL_GIT" "$@"
+EOF
+chmod +x "$temporary/bin/git"
+export QA_REAL_GIT="$real_git"
+export QA_GIT_CLONE_LOG="$temporary/git-clones.log"
+export PATH="$temporary/bin:$PATH"
 
 container_id=$(docker run --rm -d -e POSTGRES_DB=qa -e POSTGRES_USER=qa \
   -e POSTGRES_PASSWORD=qa-local-test -p 127.0.0.1::5432 postgres:17)
@@ -163,3 +182,39 @@ after_restart=$(curl -fsS -H "X-Agent-Key: $AgentApi__Key" -H 'Content-Type: app
   --data-binary "$payload" "http://127.0.0.1:$host_port/api/runs")
 python3 -c 'import json,sys; r=json.loads(sys.argv[1]); assert r["runId"] == sys.argv[2] and r["duplicate"]; print("M1 database migration, restart persistence, missing SHA and duplicate push: OK")' \
   "$after_restart" "$run_id"
+
+second_port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')
+(
+  cd "$root/src/QaAgent.Host"
+  export ASPNETCORE_URLS="http://127.0.0.1:$second_port"
+  exec dotnet bin/Debug/net10.0/QaAgent.Host.dll
+) > "$temporary/second-host.log" 2>&1 &
+host_pid_two=$!
+for _ in {1..30}; do
+  if curl -fsS "http://127.0.0.1:$second_port/healthz" > /dev/null 2>&1; then
+    break
+  fi
+  if ! kill -0 "$host_pid_two" 2>/dev/null; then
+    cat "$temporary/second-host.log" >&2
+    exit 1
+  fi
+  sleep 1
+done
+curl -fsS "http://127.0.0.1:$second_port/healthz" > /dev/null
+
+clones_before=$(wc -l < "$QA_GIT_CLONE_LOG")
+shared_payload=$(python3 -c 'import json,sys; p=json.loads(sys.argv[1]); p["headSha"]=sys.argv[2]; print(json.dumps(p))' "$payload" "$later_sha")
+shared_response=$(curl -fsS -H "X-Agent-Key: $AgentApi__Key" -H 'Content-Type: application/json' \
+  --data-binary "$shared_payload" "http://127.0.0.1:$host_port/api/runs")
+shared_run_id=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["runId"])' "$shared_response")
+for _ in {1..30}; do
+  shared_result=$(curl -fsS -H "X-Agent-Key: $AgentApi__Key" \
+    "http://127.0.0.1:$host_port/api/runs/$shared_run_id")
+  if python3 -c 'import json,sys; exit(0 if json.loads(sys.argv[1])["state"] == "Completed" else 1)' "$shared_result"; then
+    break
+  fi
+  sleep 1
+done
+clones_after=$(wc -l < "$QA_GIT_CLONE_LOG")
+[[ $((clones_after - clones_before)) -eq 1 ]]
+python3 -c 'import json,sys; r=json.loads(sys.argv[1]); assert {f["path"] for f in r["changedFiles"]} == {"feature.txt", "feature-two.txt", "later.txt"}; print("M1 conditional queue claim with two hosts: OK")' "$shared_result"

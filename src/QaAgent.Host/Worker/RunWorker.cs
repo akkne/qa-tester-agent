@@ -14,11 +14,11 @@ public sealed class RunWorker(
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        await RecoverInterruptedRunsAsync(stoppingToken);
         while (!stoppingToken.IsCancellationRequested)
         {
             try
             {
+                await RecoverInterruptedRunsAsync(stoppingToken);
                 await ProcessOneAsync(stoppingToken);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
@@ -38,9 +38,11 @@ public sealed class RunWorker(
     {
         using IServiceScope scope = scopeFactory.CreateScope();
         IUnitOfWork unitOfWork = scope.ServiceProvider.GetRequiredService<IUnitOfWork>();
-        while (await unitOfWork.Runs.FindOldestRunningAsync(cancellationToken) is { } run)
+        DateTimeOffset cutoff = clock.UtcNow.AddMinutes(
+            -configuration.GetValue<int>("Agent:StageTimeoutMinutes") - 1);
+        while (await unitOfWork.Runs.FindOldestRunningAsync(cutoff, cancellationToken) is { } run)
         {
-            run.Block("Worker restarted before the Git stage completed.", clock.UtcNow);
+            run.Block("Git stage did not finish before its timeout.", clock.UtcNow);
             await unitOfWork.Runs.UpdateAsync(run, cancellationToken);
             await unitOfWork.CommitAsync(cancellationToken);
         }
@@ -56,9 +58,10 @@ public sealed class RunWorker(
             return;
         }
 
-        run.Start(clock.UtcNow);
-        await unitOfWork.Runs.UpdateAsync(run, cancellationToken);
-        await unitOfWork.CommitAsync(cancellationToken);
+        if (!await unitOfWork.Runs.TryStartAsync(run, clock.UtcNow, cancellationToken))
+        {
+            return;
+        }
 
         try
         {
