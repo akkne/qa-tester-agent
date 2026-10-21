@@ -8,6 +8,7 @@
     <PackageReference Include="xunit" />
     <PackageReference Include="xunit.runner.visualstudio" PrivateAssets="all" />
     <PackageReference Include="coverlet.collector" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" />
     <ProjectReference Include="../Demo.Web/Demo.Web.csproj" />
   </ItemGroup>
 </Project>

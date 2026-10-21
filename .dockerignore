@@ -1,0 +1,9 @@
+.git
+.env*
+**/bin
+**/obj
+artifacts
+worktrees
+TestResults
+test-results
+playwright-report

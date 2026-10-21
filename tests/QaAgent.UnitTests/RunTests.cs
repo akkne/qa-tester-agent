@@ -46,6 +46,30 @@ public sealed class RunTests
             Guid.NewGuid(), "owner/repo", sha, sha, 1, CreatedAt));
     }
 
+    [Fact]
+    public void A_blocked_run_restores_its_reason_and_timestamps()
+    {
+        Run run = CreateRun();
+        run.Start(CreatedAt.AddMinutes(1));
+        run.Block("Git object missing", CreatedAt.AddMinutes(2));
+
+        Run restored = Run.Restore(
+            run.Id,
+            run.RepositoryId,
+            run.BaseSha,
+            run.HeadSha,
+            run.ProfileVersion,
+            run.CreatedAt,
+            run.StartedAt,
+            run.FinishedAt,
+            run.FinalStatus,
+            run.FailureReason);
+
+        Assert.Equal(RunState.Completed, restored.State);
+        Assert.Equal(RunStatus.Blocked, restored.FinalStatus);
+        Assert.Equal("Git object missing", restored.FailureReason);
+    }
+
     private static Run CreateRun() => Run.Queue(
         Guid.NewGuid(),
         "owner/repo",

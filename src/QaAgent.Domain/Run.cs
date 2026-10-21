@@ -12,6 +12,7 @@ public sealed class Run
     public DateTimeOffset CreatedAt { get; }
     public DateTimeOffset? StartedAt { get; private set; }
     public DateTimeOffset? FinishedAt { get; private set; }
+    public string? FailureReason { get; private set; }
 
     private Run(
         Guid id,
@@ -95,5 +96,43 @@ public sealed class Run
         State = RunState.Completed;
         FinalStatus = status;
         FinishedAt = now;
+    }
+
+    public void Block(string reason, DateTimeOffset now)
+    {
+        if (string.IsNullOrWhiteSpace(reason))
+        {
+            throw new ArgumentException("A reason is required.", nameof(reason));
+        }
+
+        Complete(RunStatus.Blocked, now);
+        FailureReason = reason;
+    }
+
+    public static Run Restore(
+        Guid id,
+        string repositoryId,
+        CommitSha baseSha,
+        CommitSha headSha,
+        int profileVersion,
+        DateTimeOffset createdAt,
+        DateTimeOffset? startedAt,
+        DateTimeOffset? finishedAt,
+        RunStatus? finalStatus,
+        string? failureReason)
+    {
+        Run run = Queue(id, repositoryId, baseSha, headSha, profileVersion, createdAt);
+        if (startedAt is not null)
+        {
+            run.Start(startedAt.Value);
+        }
+
+        if (finishedAt is not null && finalStatus is not null)
+        {
+            run.Complete(finalStatus.Value, finishedAt.Value);
+            run.FailureReason = failureReason;
+        }
+
+        return run;
     }
 }
