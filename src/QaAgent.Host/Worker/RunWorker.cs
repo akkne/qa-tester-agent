@@ -5,7 +5,11 @@ using QaAgent.Infrastructure.Persistence;
 
 namespace QaAgent.Host.Worker;
 
-public sealed class RunWorker(IServiceScopeFactory scopeFactory, IClock clock, ILogger<RunWorker> logger)
+public sealed class RunWorker(
+    IServiceScopeFactory scopeFactory,
+    IClock clock,
+    IConfiguration configuration,
+    ILogger<RunWorker> logger)
     : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -58,9 +62,13 @@ public sealed class RunWorker(IServiceScopeFactory scopeFactory, IClock clock, I
 
         try
         {
+            using CancellationTokenSource stageTimeout =
+                CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            stageTimeout.CancelAfter(TimeSpan.FromMinutes(
+                configuration.GetValue<int>("Agent:StageTimeoutMinutes")));
             IGitWorkspace git = scope.ServiceProvider.GetRequiredService<IGitWorkspace>();
             GitSnapshot snapshot = await git.PrepareAsync(
-                run.RepositoryId, run.BaseSha, run.HeadSha, cancellationToken);
+                run.RepositoryId, run.BaseSha, run.HeadSha, stageTimeout.Token);
             RunDbContext db = scope.ServiceProvider.GetRequiredService<RunDbContext>();
             RunRecord record = await db.Runs.FindAsync([run.Id], cancellationToken)
                 ?? throw new InvalidOperationException("Run disappeared from the database.");
@@ -77,6 +85,10 @@ public sealed class RunWorker(IServiceScopeFactory scopeFactory, IClock clock, I
             }
 
             run.Block("Git range captured. Analysis and execution start in M2 and M3.", clock.UtcNow);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            run.Block("Git stage timed out.", clock.UtcNow);
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {

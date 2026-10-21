@@ -17,6 +17,12 @@ if (pipelineConfigured)
         }
     }
 
+    if (builder.Configuration.GetValue<int>("Agent:WorkerCount") != 1 ||
+        builder.Configuration.GetValue<int>("Agent:StageTimeoutMinutes") <= 0)
+    {
+        throw new InvalidOperationException("M1 requires one worker and a positive stage timeout.");
+    }
+
     string urls = builder.Configuration["urls"] ?? "http://localhost:5000";
     foreach (string address in urls.Split(';', StringSplitOptions.RemoveEmptyEntries))
     {
@@ -35,7 +41,7 @@ WebApplication app = builder.Build();
 if (pipelineConfigured)
 {
     using IServiceScope scope = app.Services.CreateScope();
-    await scope.ServiceProvider.GetRequiredService<RunDbContext>().Database.EnsureCreatedAsync();
+    await scope.ServiceProvider.GetRequiredService<RunDbContext>().Database.MigrateAsync();
     app.MapRunEndpoints();
     app.MapGet("/healthz", async (RunDbContext db, CancellationToken cancellationToken) =>
         await db.Database.CanConnectAsync(cancellationToken)

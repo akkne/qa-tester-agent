@@ -28,7 +28,10 @@ git -C "$repository" commit -qm 'base'
 base_sha=$(git -C "$repository" rev-parse HEAD)
 printf 'feature\n' > "$repository/feature.txt"
 git -C "$repository" add feature.txt
-git -C "$repository" commit -qm 'head'
+git -C "$repository" commit -qm 'feature one'
+printf 'second feature\n' > "$repository/feature-two.txt"
+git -C "$repository" add feature-two.txt
+git -C "$repository" commit -qm 'feature two'
 head_sha=$(git -C "$repository" rev-parse HEAD)
 printf 'later\n' > "$repository/later.txt"
 git -C "$repository" add later.txt
@@ -55,21 +58,34 @@ export GitHub__Branch='main'
 export GitHub__SourcePath="$repository"
 export Agent__WorkspaceRoot="$temporary/worktrees"
 export AgentApi__Key='qa-local-test-key'
-dotnet run --project "$root/src/QaAgent.Host/QaAgent.Host.csproj" \
-  > "$temporary/host.log" 2>&1 &
-host_pid=$!
+dotnet build "$root/src/QaAgent.Host/QaAgent.Host.csproj" -v:q \
+  > "$temporary/build.log" 2>&1 || { cat "$temporary/build.log" >&2; exit 1; }
 
-for _ in {1..30}; do
-  if curl -fsS "http://127.0.0.1:$host_port/healthz" > /dev/null 2>&1; then
-    break
-  fi
-  if ! kill -0 "$host_pid" 2>/dev/null; then
-    cat "$temporary/host.log" >&2
-    exit 1
-  fi
-  sleep 1
-done
-curl -fsS "http://127.0.0.1:$host_port/healthz" > /dev/null
+start_host() {
+  local log_path="$1"
+  (
+    cd "$root/src/QaAgent.Host"
+    exec dotnet bin/Debug/net10.0/QaAgent.Host.dll
+  ) > "$log_path" 2>&1 &
+  host_pid=$!
+  for _ in {1..30}; do
+    if curl -fsS "http://127.0.0.1:$host_port/healthz" > /dev/null 2>&1; then
+      return
+    fi
+    if ! kill -0 "$host_pid" 2>/dev/null; then
+      cat "$log_path" >&2
+      exit 1
+    fi
+    sleep 1
+  done
+  cat "$log_path" >&2
+  exit 1
+}
+
+start_host "$temporary/host.log"
+migration_count=$(docker exec "$container_id" psql -U qa -d qa -Atc \
+  'select count(*) from "__EFMigrationsHistory";')
+[[ "$migration_count" == '1' ]]
 
 payload=$(python3 -c 'import json,sys; print(json.dumps({"repository":"example/qa-agent-demo","branch":"main","baseSha":sys.argv[1],"headSha":sys.argv[2],"profileId":"demo"}))' "$base_sha" "$head_sha")
 first=$(curl -fsS -H "X-Agent-Key: $AgentApi__Key" -H 'Content-Type: application/json' \
@@ -86,6 +102,15 @@ zero_status=$(curl -sS -o /dev/null -w '%{http_code}' -H "X-Agent-Key: $AgentApi
   -H 'Content-Type: application/json' --data-binary "$zero_payload" \
   "http://127.0.0.1:$host_port/api/runs")
 [[ "$zero_status" == '400' ]]
+qa_branch_payload=$(python3 -c 'import json,sys; p=json.loads(sys.argv[1]); p["branch"]="qa/review"; print(json.dumps(p))' "$payload")
+qa_branch_status=$(curl -sS -o /dev/null -w '%{http_code}' -H "X-Agent-Key: $AgentApi__Key" \
+  -H 'Content-Type: application/json' --data-binary "$qa_branch_payload" \
+  "http://127.0.0.1:$host_port/api/runs")
+[[ "$qa_branch_status" == '403' ]]
+missing_payload=$(python3 -c 'import json,sys; p=json.loads(sys.argv[1]); p["headSha"]="f"*40; print(json.dumps(p))' "$payload")
+missing_response=$(curl -fsS -H "X-Agent-Key: $AgentApi__Key" -H 'Content-Type: application/json' \
+  --data-binary "$missing_payload" "http://127.0.0.1:$host_port/api/runs")
+missing_run_id=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["runId"])' "$missing_response")
 
 parallel_payload=$(python3 -c 'import json,sys; p=json.loads(sys.argv[1]); p["baseSha"]=sys.argv[2]; p["headSha"]=sys.argv[3]; print(json.dumps(p))' "$payload" "$head_sha" "$later_sha")
 curl -fsS -H "X-Agent-Key: $AgentApi__Key" -H 'Content-Type: application/json' \
@@ -96,8 +121,8 @@ curl -fsS -H "X-Agent-Key: $AgentApi__Key" -H 'Content-Type: application/json' \
 parallel_two_pid=$!
 wait "$parallel_one_pid"
 wait "$parallel_two_pid"
-python3 -c 'import json,sys; a=json.load(open(sys.argv[1])); b=json.load(open(sys.argv[2])); assert a["runId"] == b["runId"]; assert sorted([a["duplicate"], b["duplicate"]]) == [False, True]' \
-  "$temporary/parallel-one.json" "$temporary/parallel-two.json"
+parallel_run_id=$(python3 -c 'import json,sys; a=json.load(open(sys.argv[1])); b=json.load(open(sys.argv[2])); assert a["runId"] == b["runId"]; assert sorted([a["duplicate"], b["duplicate"]]) == [False, True]; print(a["runId"])' \
+  "$temporary/parallel-one.json" "$temporary/parallel-two.json")
 
 for _ in {1..30}; do
   result=$(curl -fsS -H "X-Agent-Key: $AgentApi__Key" \
@@ -107,5 +132,34 @@ for _ in {1..30}; do
   fi
   sleep 1
 done
-python3 -c 'import json,sys; r=json.loads(sys.argv[1]); assert r["baseSha"] == sys.argv[2]; assert r["headSha"] == sys.argv[3]; assert r["finalStatus"] == "Blocked"; assert [f["path"] for f in r["changedFiles"]] == ["feature.txt"]; print("M1 PostgreSQL, API idempotency, worker and exact Git range: OK")' \
+python3 -c 'import json,sys; r=json.loads(sys.argv[1]); assert r["baseSha"] == sys.argv[2]; assert r["headSha"] == sys.argv[3]; assert r["finalStatus"] == "Blocked"; assert {f["path"] for f in r["changedFiles"]} == {"feature.txt", "feature-two.txt"}; print("M1 PostgreSQL, API idempotency, worker and multi-commit Git range: OK")' \
   "$result" "$base_sha" "$head_sha"
+
+for _ in {1..30}; do
+  missing_result=$(curl -fsS -H "X-Agent-Key: $AgentApi__Key" \
+    "http://127.0.0.1:$host_port/api/runs/$missing_run_id")
+  if python3 -c 'import json,sys; exit(0 if json.loads(sys.argv[1])["state"] == "Completed" else 1)' "$missing_result"; then
+    break
+  fi
+  sleep 1
+done
+python3 -c 'import json,sys; r=json.loads(sys.argv[1]); assert r["finalStatus"] == "Blocked"; assert r["changedFiles"] is None; assert "Git range unavailable" in r["failureReason"]' "$missing_result"
+
+for _ in {1..30}; do
+  parallel_result=$(curl -fsS -H "X-Agent-Key: $AgentApi__Key" \
+    "http://127.0.0.1:$host_port/api/runs/$parallel_run_id")
+  if python3 -c 'import json,sys; exit(0 if json.loads(sys.argv[1])["state"] == "Completed" else 1)' "$parallel_result"; then
+    break
+  fi
+  sleep 1
+done
+python3 -c 'import json,sys; r=json.loads(sys.argv[1]); assert r["finalStatus"] == "Blocked"; assert [f["path"] for f in r["changedFiles"]] == ["later.txt"]' "$parallel_result"
+
+kill "$host_pid"
+wait "$host_pid" 2>/dev/null || true
+host_pid=''
+start_host "$temporary/restarted-host.log"
+after_restart=$(curl -fsS -H "X-Agent-Key: $AgentApi__Key" -H 'Content-Type: application/json' \
+  --data-binary "$payload" "http://127.0.0.1:$host_port/api/runs")
+python3 -c 'import json,sys; r=json.loads(sys.argv[1]); assert r["runId"] == sys.argv[2] and r["duplicate"]; print("M1 database migration, restart persistence, missing SHA and duplicate push: OK")' \
+  "$after_restart" "$run_id"

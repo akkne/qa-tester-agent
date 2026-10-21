@@ -81,9 +81,10 @@ public static class RunEndpoints
             return Results.BadRequest(new { error = "baseSha and headSha must differ." });
         }
 
-        if (baseSha.Value.All(character => character == '0'))
+        if (baseSha.Value.All(character => character == '0') ||
+            headSha.Value.All(character => character == '0'))
         {
-            return Results.BadRequest(new { error = "A real first baseSha is required." });
+            return Results.BadRequest(new { error = "Real baseSha and headSha commits are required." });
         }
 
         Run? existing = await unitOfWork.Runs.FindByPushAsync(

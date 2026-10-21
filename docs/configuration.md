@@ -16,9 +16,13 @@
 
 `appsettings.Demo.json` задаёт профиль `demo`: разрешённые каталоги тестов и ТЗ, команды сборки/тестов/стенда, healthcheck, desktop и mobile viewport. В М0 `demo/` содержит только запускаемый шаблон. Команды профиля для Compose станут работоспособными после Docker-окружения М1. Для другого репозитория добавляется отдельный профиль с явной проверкой команд и путей, а не автоматическое определение LLM.
 
-Для локальной М1 поднимите PostgreSQL через `QA_POSTGRES_PASSWORD=<локальный пароль> docker compose up -d postgres`. Задайте `ConnectionStrings__Postgres` для `127.0.0.1:5433`, `AgentApi__Key`, `GitHub__Repository=owner/repo`, `GitHub__Branch=main` и при локальной проверке `GitHub__SourcePath` с путём к checkout. Без `GitHub__SourcePath` Git CLI клонирует `https://github.com/owner/repo.git`; приватный доступ на runner/хосте нужно заранее настроить через Git credential helper. `ASPNETCORE_URLS=http://127.0.0.1:5080` удерживает API на loopback. После этого запускайте `dotnet run --project src/QaAgent.Host`.
+Для локальной М1 поднимите PostgreSQL через `QA_POSTGRES_PASSWORD=<локальный пароль> docker compose up -d postgres`. Заполните игнорируемый `.env.demo`: `ConnectionStrings__Postgres` для `127.0.0.1:5433`, `AgentApi__Key`, `GitHub__Repository=owner/repo`, `GitHub__Branch=main` и при локальной проверке `GitHub__SourcePath` с путём к checkout. Без `GitHub__SourcePath` Git CLI клонирует `https://github.com/owner/repo.git`; приватный доступ на runner/хосте нужно заранее настроить через Git credential helper. `ASPNETCORE_URLS=http://127.0.0.1:5080` удерживает API на loopback. Запускайте `python3 scripts/run_agent.py demo`: он читает `.env.demo` без интерпретации как shell-кода и передаёт значения процессу .NET. Уже заданные переменные процесса имеют приоритет.
+
+Хост применяет EF Core миграции при старте. Схема М1 находится в `src/QaAgent.Infrastructure/Persistence/Migrations/`; команда `dotnet tool restore` восстанавливает закреплённый в `dotnet-tools.json` инструмент для следующих миграций. `bash scripts/check.sh` проверяет, что модель БД и последняя миграция совпадают.
 
 Workflow использует GitHub secret `QA_AGENT_API_KEY` и, для первого push с нулевым `before`, repository variable `QA_INITIAL_BASE_SHA`. Значение первого base SHA должно указывать на существующий commit. Сквозная локальная проверка `bash scripts/check_m1.sh` сама создаёт временные PostgreSQL и Git-репозиторий и не использует настоящие ключи.
+
+После первой загрузки workflow можно запустить вручную через `workflow_dispatch`, указав два существующих SHA. Это позволяет проверить доставку без нового коммита; повтор того же диапазона вернёт прежний `runId`.
 
 ## Значения и проверка
 

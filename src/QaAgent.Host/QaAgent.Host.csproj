@@ -1,5 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk.Web">
   <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" PrivateAssets="all" />
     <ProjectReference Include="../QaAgent.Application/QaAgent.Application.csproj" />
     <ProjectReference Include="../QaAgent.Infrastructure/QaAgent.Infrastructure.csproj" />
     <ProjectReference Include="../QaAgent.Domain/QaAgent.Domain.csproj" />
