@@ -1,0 +1,23 @@
+# Local integration settings and secrets. Commit only *.example files.
+.env
+.env.*
+!.env.*.example
+
+# .NET and IDE output
+**/bin/
+**/obj/
+.vs/
+.vscode/
+*.user
+
+# Local runs and browser artifacts
+artifacts/
+worktrees/
+test-results/
+playwright-report/
+TestResults/
+
+# OS files
+.DS_Store
+__pycache__/
+*.pyc

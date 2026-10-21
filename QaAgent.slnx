@@ -1,0 +1,16 @@
+<Solution>
+  <Folder Name="/demo/">
+    <Project Path="demo/Demo.Tests/Demo.Tests.csproj" />
+    <Project Path="demo/Demo.Web/Demo.Web.csproj" />
+  </Folder>
+  <Folder Name="/src/">
+    <Project Path="src/QaAgent.Application/QaAgent.Application.csproj" />
+    <Project Path="src/QaAgent.Domain/QaAgent.Domain.csproj" />
+    <Project Path="src/QaAgent.Host/QaAgent.Host.csproj" />
+    <Project Path="src/QaAgent.Infrastructure/QaAgent.Infrastructure.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/QaAgent.IntegrationTests/QaAgent.IntegrationTests.csproj" />
+    <Project Path="tests/QaAgent.UnitTests/QaAgent.UnitTests.csproj" />
+  </Folder>
+</Solution>

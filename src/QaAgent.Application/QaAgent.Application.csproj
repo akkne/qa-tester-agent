@@ -1,0 +1,5 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="../QaAgent.Domain/QaAgent.Domain.csproj" />
+  </ItemGroup>
+</Project>
