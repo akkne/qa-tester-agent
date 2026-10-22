@@ -35,6 +35,9 @@ PROJECTS = {
     },
     "demo/Demo.Web/Demo.Web.csproj": set(),
     "demo/Demo.Tests/Demo.Tests.csproj": {"demo/Demo.Web/Demo.Web.csproj"},
+    "tools/M3Probe/M3Probe.csproj": {
+        "src/QaAgent.Infrastructure/QaAgent.Infrastructure.csproj"
+    },
 }
 
 
