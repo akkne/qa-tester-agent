@@ -44,9 +44,11 @@ public static class ServiceCollectionExtensions
         });
         services.AddSingleton<IGitWorkspace, GitCliWorkspace>();
         services.AddScoped<ICoverageCalculator, CoberturaCoverageCalculator>();
-        services.AddScoped<IM3Executor>(provider => new DockerM3Executor(
-            configuration["Agent:ArtifactRoot"] ?? "artifacts",
-            provider.GetRequiredService<ICoverageCalculator>()));
+        services.AddScoped<IM3Executor>(provider =>
+            configuration["Profiles:demo:ExecutionMode"] == "lead-qualification"
+                ? new LeadQualificationM3Executor(configuration["Agent:ArtifactRoot"] ?? "artifacts")
+                : new DockerM3Executor(configuration["Agent:ArtifactRoot"] ?? "artifacts",
+                    provider.GetRequiredService<ICoverageCalculator>()));
         services.AddScoped<IReportPublisher>(_ => new GitReportPublisher(
             configuration["Agent:ArtifactRoot"] ?? "artifacts",
             string.IsNullOrWhiteSpace(configuration["GitHub:PublishRemote"])

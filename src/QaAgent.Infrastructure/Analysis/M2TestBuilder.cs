@@ -90,8 +90,11 @@ public sealed partial class M2TestBuilder : IM2TestBuilder
             throw new InvalidOperationException("No test project found under allowed test directories.");
         }
 
+        // The bot's xUnit v3 project resolves its full reference graph when built through the solution.
+        string solution = Path.Combine(root, "LeadQualification.slnx");
+        string[] buildTargets = File.Exists(solution) ? [solution] : projects;
         List<string> diagnostics = [];
-        foreach (string project in projects)
+        foreach (string project in buildTargets)
         {
             ProcessStartInfo start = new("dotnet")
             {
