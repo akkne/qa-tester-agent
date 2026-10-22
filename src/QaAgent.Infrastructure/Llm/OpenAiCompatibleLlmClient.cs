@@ -7,6 +7,8 @@ namespace QaAgent.Infrastructure.Llm;
 
 public sealed class OpenAiCompatibleLlmClient(HttpClient httpClient, LlmClientOptions options) : ILlmClient
 {
+    private const int MaxAttempts = 3;
+
     public async Task<LlmResponse> GenerateAsync(LlmRequest request, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -18,25 +20,75 @@ public sealed class OpenAiCompatibleLlmClient(HttpClient httpClient, LlmClientOp
             throw new ArgumentException("The JSON schema must be an object.", nameof(request));
         }
 
-        using HttpRequestMessage message = new(HttpMethod.Post, "chat/completions");
-        if (!string.IsNullOrWhiteSpace(options.ApiKey))
+        for (int attempt = 1; ; attempt++)
         {
-            message.Headers.Authorization = new AuthenticationHeaderValue("Bearer", options.ApiKey);
-        }
-
-        message.Content = JsonContent.Create(new
-        {
-            model = options.Model,
-            messages = new[] { new { role = "user", content = request.Prompt } },
-            response_format = new
+            using HttpRequestMessage message = new(HttpMethod.Post, "chat/completions");
+            if (!string.IsNullOrWhiteSpace(options.ApiKey))
             {
-                type = "json_schema",
-                json_schema = new { name = "qa_agent_response", strict = true, schema = schema.RootElement }
-            },
-            max_tokens = options.MaxOutputTokens
-        });
+                message.Headers.Authorization = new AuthenticationHeaderValue("Bearer", options.ApiKey);
+            }
 
-        using HttpResponseMessage response = await httpClient.SendAsync(message, cancellationToken);
+            message.Content = JsonContent.Create(new
+            {
+                model = options.Model,
+                messages = new[] { new { role = "user", content = request.Prompt } },
+                response_format = new
+                {
+                    type = "json_schema",
+                    json_schema = new { name = "qa_agent_response", strict = true, schema = schema.RootElement }
+                },
+                max_tokens = options.MaxOutputTokens
+            });
+
+            HttpResponseMessage response;
+            try
+            {
+                response = await httpClient.SendAsync(message, cancellationToken);
+            }
+            catch (HttpRequestException) when (attempt < MaxAttempts && !cancellationToken.IsCancellationRequested)
+            {
+                await Task.Delay(Backoff(attempt), cancellationToken);
+                continue;
+            }
+
+            using (response)
+            {
+                if (IsTransient(response.StatusCode) && attempt < MaxAttempts)
+                {
+                    TimeSpan backoff = Backoff(attempt);
+                    TimeSpan? retryAfter = response.Headers.RetryAfter?.Delta ??
+                        (response.Headers.RetryAfter?.Date - DateTimeOffset.UtcNow);
+                    if (retryAfter is { } requested && requested > backoff)
+                    {
+                        backoff = requested;
+                    }
+
+                    // A long server limit is a blocked run, not a worker held for minutes.
+                    if (backoff <= TimeSpan.FromSeconds(5))
+                    {
+                        await Task.Delay(backoff, cancellationToken);
+                        continue;
+                    }
+                }
+
+                return await ParseResponseAsync(response, cancellationToken);
+            }
+        }
+    }
+
+    private static TimeSpan Backoff(int attempt) => TimeSpan.FromMilliseconds(200 * (1 << (attempt - 1)));
+
+    private static bool IsTransient(System.Net.HttpStatusCode status) =>
+        status is System.Net.HttpStatusCode.RequestTimeout or
+            System.Net.HttpStatusCode.TooManyRequests or
+            System.Net.HttpStatusCode.InternalServerError or
+            System.Net.HttpStatusCode.BadGateway or
+            System.Net.HttpStatusCode.ServiceUnavailable or
+            System.Net.HttpStatusCode.GatewayTimeout;
+
+    private static async Task<LlmResponse> ParseResponseAsync(
+        HttpResponseMessage response, CancellationToken cancellationToken)
+    {
         if (!response.IsSuccessStatusCode)
         {
             throw new HttpRequestException($"LLM request failed with HTTP {(int)response.StatusCode}.", null,

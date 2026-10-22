@@ -58,6 +58,89 @@ public sealed class LlmClientTests
             new LlmRequest("Check", "{}"), CancellationToken.None));
     }
 
+    [Theory]
+    [InlineData(HttpStatusCode.TooManyRequests)]
+    [InlineData(HttpStatusCode.ServiceUnavailable)]
+    public async Task Retries_transient_llm_failures_then_returns_result(HttpStatusCode status)
+    {
+        int calls = 0;
+        using HttpClient http = new(new StubHandler(_ =>
+        {
+            calls++;
+            return Task.FromResult(calls < 3
+                ? new HttpResponseMessage(status)
+                : JsonResponse("""
+                    {"choices":[{"finish_reason":"stop","message":{"content":"{\"ok\":true}"}}],"usage":{"prompt_tokens":2,"completion_tokens":1}}
+                    """));
+        }))
+        { BaseAddress = new Uri("https://llm.example/v1/") };
+
+        OpenAiCompatibleLlmClient client = new(http, new LlmClientOptions { Model = "test-model" });
+        LlmResponse result = await client.GenerateAsync(new LlmRequest("Check", "{}"), CancellationToken.None);
+
+        Assert.Equal(3, calls);
+        Assert.Equal("{\"ok\":true}", result.Json);
+    }
+
+    [Fact]
+    public async Task Does_not_retry_nontransient_llm_failure()
+    {
+        int calls = 0;
+        using HttpClient http = new(new StubHandler(_ =>
+        {
+            calls++;
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.BadRequest));
+        }))
+        { BaseAddress = new Uri("https://llm.example/v1/") };
+
+        OpenAiCompatibleLlmClient client = new(http, new LlmClientOptions { Model = "test-model" });
+        HttpRequestException error = await Assert.ThrowsAsync<HttpRequestException>(() =>
+            client.GenerateAsync(new LlmRequest("Check", "{}"), CancellationToken.None));
+
+        Assert.Equal(HttpStatusCode.BadRequest, error.StatusCode);
+        Assert.Equal(1, calls);
+    }
+
+    [Fact]
+    public async Task Stops_retrying_after_three_transient_failures()
+    {
+        int calls = 0;
+        using HttpClient http = new(new StubHandler(_ =>
+        {
+            calls++;
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.BadGateway));
+        }))
+        { BaseAddress = new Uri("https://llm.example/v1/") };
+
+        OpenAiCompatibleLlmClient client = new(http, new LlmClientOptions { Model = "test-model" });
+        HttpRequestException error = await Assert.ThrowsAsync<HttpRequestException>(() =>
+            client.GenerateAsync(new LlmRequest("Check", "{}"), CancellationToken.None));
+
+        Assert.Equal(HttpStatusCode.BadGateway, error.StatusCode);
+        Assert.Equal(3, calls);
+    }
+
+    [Fact]
+    public async Task Does_not_hold_worker_for_long_retry_after()
+    {
+        int calls = 0;
+        using HttpClient http = new(new StubHandler(_ =>
+        {
+            calls++;
+            HttpResponseMessage response = new(HttpStatusCode.TooManyRequests);
+            response.Headers.RetryAfter = new System.Net.Http.Headers.RetryConditionHeaderValue(TimeSpan.FromMinutes(2));
+            return Task.FromResult(response);
+        }))
+        { BaseAddress = new Uri("https://llm.example/v1/") };
+
+        OpenAiCompatibleLlmClient client = new(http, new LlmClientOptions { Model = "test-model" });
+        HttpRequestException error = await Assert.ThrowsAsync<HttpRequestException>(() =>
+            client.GenerateAsync(new LlmRequest("Check", "{}"), CancellationToken.None));
+
+        Assert.Equal(HttpStatusCode.TooManyRequests, error.StatusCode);
+        Assert.Equal(1, calls);
+    }
+
     [Fact]
     public void Host_registers_llm_client_from_configuration()
     {
