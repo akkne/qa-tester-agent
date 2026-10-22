@@ -5,6 +5,7 @@ using Microsoft.EntityFrameworkCore;
 using QaAgent.Application;
 using QaAgent.Application.Abstractions;
 using QaAgent.Application.Analysis;
+using QaAgent.Application.Execution;
 using QaAgent.Domain;
 using QaAgent.Infrastructure.Persistence;
 
@@ -136,13 +137,16 @@ public static class RunEndpoints
         }
 
         var stored = await dbContext.Runs.Where(record => record.Id == id)
-            .Select(record => new { record.ChangedFilesJson, record.M2ResultJson }).SingleAsync(cancellationToken);
+            .Select(record => new { record.ChangedFilesJson, record.M2ResultJson, record.M3ResultJson }).SingleAsync(cancellationToken);
         IReadOnlyList<ChangedFile>? changedFiles = stored.ChangedFilesJson is null
             ? null
             : JsonSerializer.Deserialize<List<ChangedFile>>(stored.ChangedFilesJson);
         M2Result? analysis = stored.M2ResultJson is null
             ? null
             : JsonSerializer.Deserialize<M2Result>(stored.M2ResultJson);
+        M3Result? execution = stored.M3ResultJson is null
+            ? null
+            : JsonSerializer.Deserialize<M3Result>(stored.M3ResultJson);
         return Results.Ok(new
         {
             run.Id,
@@ -170,7 +174,8 @@ public static class RunEndpoints
                 analysis.TestsCompile,
                 analysis.BuildDiagnostics,
                 analysis.SecretFindings
-            }
+            },
+            Execution = execution
         });
     }
 

@@ -1,6 +1,6 @@
 using QaAgent.Application.Abstractions;
-using QaAgent.Infrastructure.Analysis;
 using QaAgent.Domain;
+using QaAgent.Infrastructure.Analysis;
 
 namespace QaAgent.IntegrationTests;
 

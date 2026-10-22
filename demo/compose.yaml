@@ -21,7 +21,8 @@ services:
         condition: service_healthy
     environment:
       ASPNETCORE_URLS: http://0.0.0.0:8080
-    ports: ["127.0.0.1:5081:8080"]
+      DEMO_SOURCE_SHA: ${M3_HEAD_SHA:-unverified}
+    ports: ["127.0.0.1:${M3_PORT:-5081}:8080"]
     networks: [demo]
 
   tests:

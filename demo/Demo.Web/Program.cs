@@ -50,7 +50,11 @@ app.UseAuthentication();
 app.UseAuthorization();
 
 app.MapGet("/", () => Results.Content(DemoPages.Home(), "text/html; charset=utf-8"));
-app.MapGet("/healthz", () => Results.Ok(new { status = "ready", phase = "M2" }));
+app.MapGet("/healthz", () => Results.Ok(new
+{
+    status = "ready",
+    sourceSha = Environment.GetEnvironmentVariable("DEMO_SOURCE_SHA") ?? "unverified"
+}));
 
 app.MapGet("/register", (HttpContext context, IAntiforgery antiforgery) =>
     Results.Content(DemoPages.Register(antiforgery.GetAndStoreTokens(context).RequestToken!), "text/html; charset=utf-8"));

@@ -2,8 +2,10 @@ using Microsoft.EntityFrameworkCore;
 using QaAgent.Application;
 using QaAgent.Application.Abstractions;
 using QaAgent.Application.Analysis;
+using QaAgent.Application.Execution;
 using QaAgent.Host.Worker;
 using QaAgent.Infrastructure.Analysis;
+using QaAgent.Infrastructure.Execution;
 using QaAgent.Infrastructure.Git;
 using QaAgent.Infrastructure.Persistence;
 using QaAgent.Infrastructure.Time;
@@ -40,6 +42,10 @@ public static class ServiceCollectionExtensions
             WorkspaceRoot = Path.GetFullPath(workspaceRoot)
         });
         services.AddSingleton<IGitWorkspace, GitCliWorkspace>();
+        services.AddScoped<ICoverageCalculator, CoberturaCoverageCalculator>();
+        services.AddScoped<IM3Executor>(provider => new DockerM3Executor(
+            configuration["Agent:ArtifactRoot"] ?? "artifacts",
+            provider.GetRequiredService<ICoverageCalculator>()));
         if (!string.IsNullOrWhiteSpace(configuration["Llm:Model"]))
         {
             services.AddLlmClient(configuration);

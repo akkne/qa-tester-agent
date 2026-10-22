@@ -1,6 +1,7 @@
 using System.Text.Json;
 using QaAgent.Application.Abstractions;
 using QaAgent.Application.Analysis;
+using QaAgent.Application.Execution;
 using QaAgent.Domain;
 using QaAgent.Infrastructure.Persistence;
 
@@ -40,10 +41,10 @@ public sealed class RunWorker(
         using IServiceScope scope = scopeFactory.CreateScope();
         IUnitOfWork unitOfWork = scope.ServiceProvider.GetRequiredService<IUnitOfWork>();
         DateTimeOffset cutoff = clock.UtcNow.AddMinutes(
-            -configuration.GetValue<int>("Agent:StageTimeoutMinutes") - 1);
+            -configuration.GetValue<int>("Agent:RunTimeoutMinutes") - 1);
         while (await unitOfWork.Runs.FindOldestRunningAsync(cutoff, cancellationToken) is { } run)
         {
-            run.Block("Git stage did not finish before its timeout.", clock.UtcNow);
+            run.Block("Run did not finish before its timeout.", clock.UtcNow);
             await unitOfWork.Runs.UpdateAsync(run, cancellationToken);
             await unitOfWork.CommitAsync(cancellationToken);
         }
@@ -65,15 +66,18 @@ public sealed class RunWorker(
         }
 
         bool gitPrepared = false;
+        bool m3Started = false;
         try
         {
-            using CancellationTokenSource stageTimeout =
+            using CancellationTokenSource runTimeout =
                 CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            stageTimeout.CancelAfter(TimeSpan.FromMinutes(
-                configuration.GetValue<int>("Agent:StageTimeoutMinutes")));
+            runTimeout.CancelAfter(TimeSpan.FromMinutes(
+                configuration.GetValue<int>("Agent:RunTimeoutMinutes")));
+            using CancellationTokenSource gitTimeout = CancellationTokenSource.CreateLinkedTokenSource(runTimeout.Token);
+            gitTimeout.CancelAfter(TimeSpan.FromMinutes(configuration.GetValue<int>("Agent:StageTimeoutMinutes")));
             IGitWorkspace git = scope.ServiceProvider.GetRequiredService<IGitWorkspace>();
             GitSnapshot snapshot = await git.PrepareAsync(
-                run.RepositoryId, run.BaseSha, run.HeadSha, stageTimeout.Token);
+                run.RepositoryId, run.BaseSha, run.HeadSha, gitTimeout.Token);
             gitPrepared = true;
             RunDbContext db = scope.ServiceProvider.GetRequiredService<RunDbContext>();
             RunRecord record = await db.Runs.FindAsync([run.Id], cancellationToken)
@@ -102,13 +106,46 @@ public sealed class RunWorker(
                         section["SpecificationDirectory"] ?? throw new InvalidOperationException("SpecificationDirectory is missing."),
                         section.GetSection("AllowedTestDirectories").Get<string[]>() ?? [],
                         section["AllowedReportDirectory"] ?? "revision");
-                    M2Result result = await m2.ProcessAsync(snapshot, profile, stageTimeout.Token);
+                    M2Result result = await m2.ProcessAsync(snapshot, profile, runTimeout.Token);
                     record.M2ResultJson = JsonSerializer.Serialize(result);
                     await db.SaveChangesAsync(cancellationToken);
-                    run.Block(result.TestsCompile
-                        ? "M2 analysis and test generation complete; M3 execution is not implemented."
-                        : "M2 generated tests did not compile after two fixes: " + result.BuildDiagnostics,
-                        clock.UtcNow);
+                    if (!result.TestsCompile)
+                    {
+                        run.Block("M2 generated tests did not compile after two fixes: " + result.BuildDiagnostics,
+                            clock.UtcNow);
+                    }
+                    else
+                    {
+                        m3Started = true;
+                        IM3Executor executor = scope.ServiceProvider.GetRequiredService<IM3Executor>();
+                        M3Result executed = await executor.ExecuteAsync(snapshot, run.Id, runTimeout.Token);
+                        record.M3ResultJson = JsonSerializer.Serialize(executed);
+                        await db.SaveChangesAsync(cancellationToken);
+                        if (!executed.StandAvailable || executed.BrowserPassed is null || executed.BrowserJson is null)
+                        {
+                            run.Block(executed.StandFailure ?? "M3 stand or browser was unavailable.", clock.UtcNow);
+                        }
+                        else if (executed.Checks.Values.Any(check => check.ExitCode == 125))
+                        {
+                            run.Block("M3 checks could not run in Docker.", clock.UtcNow);
+                        }
+                        else if (executed.TotalTests is null or 0 ||
+                                 executed.Coverage is null ||
+                                 !executed.Coverage.WholeProject.IsMeasured)
+                        {
+                            run.Block("M3 test or Coverlet results were not measured.", clock.UtcNow);
+                        }
+                        else if (executed.BrowserJson is not null &&
+                                 JsonDocument.Parse(executed.BrowserJson).RootElement.GetProperty("status").GetString() == "BLOCKED")
+                        {
+                            run.Block("M3 browser checks were blocked.", clock.UtcNow);
+                        }
+                        else
+                        {
+                            run.Complete(executed.AllChecksPassed && executed.BrowserPassed.Value
+                                ? RunStatus.Passed : RunStatus.Failed, clock.UtcNow);
+                        }
+                    }
                 }
             }
             finally
@@ -125,12 +162,12 @@ public sealed class RunWorker(
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
-            run.Block(gitPrepared ? "M2 analysis timed out." : "Git stage timed out.", clock.UtcNow);
+            run.Block(m3Started ? "M3 execution timed out." : gitPrepared ? "M2 analysis timed out." : "Git stage timed out.", clock.UtcNow);
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
-            logger.LogError(exception, "Run {RunId} failed during Git or M2 analysis", run.Id);
-            run.Block($"{(gitPrepared ? "M2 analysis" : "Git range")} unavailable: {exception.Message}", clock.UtcNow);
+            logger.LogError(exception, "Run {RunId} failed during Git, M2, or M3", run.Id);
+            run.Block($"{(m3Started ? "M3 execution" : gitPrepared ? "M2 analysis" : "Git range")} unavailable: {exception.Message}", clock.UtcNow);
         }
 
         await unitOfWork.Runs.UpdateAsync(run, cancellationToken);
