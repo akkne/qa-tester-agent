@@ -105,10 +105,12 @@ public sealed partial class CoberturaCoverageCalculator : ICoverageCalculator
         GitSnapshot snapshot,
         IReadOnlyDictionary<string, Dictionary<int, int>> coverage)
     {
-        IReadOnlyList<AddedLine> additions = ParseAddedLines(snapshot.Diff);
+        IReadOnlyList<AddedLine> additions = ParseAddedLines(snapshot.Diff)
+            .Where(line => !IsDefinitelyNonExecutable(line.Text))
+            .ToArray();
         if (additions.Count == 0)
         {
-            return new CoverageMetric(0, 0, "No changed production lines to measure.");
+            return new CoverageMetric(0, 0, "No executable changed production lines were measured.");
         }
 
         Dictionary<string, Dictionary<int, int>> resolved = new(StringComparer.Ordinal);
@@ -138,16 +140,14 @@ public sealed partial class CoberturaCoverageCalculator : ICoverageCalculator
                     covered++;
                 }
             }
-            else if (!IsDefinitelyNonExecutable(line.Text))
+            else
             {
                 return new CoverageMetric(0, 0,
                     $"Cobertura has no line mapping for {line.Path}:{line.Number}.");
             }
         }
 
-        return executable == 0
-            ? new CoverageMetric(0, 0, "No executable changed production lines were measured.")
-            : new CoverageMetric(covered, executable);
+        return new CoverageMetric(covered, executable);
     }
 
     private static IReadOnlyList<AddedLine> ParseAddedLines(string diff)
@@ -265,10 +265,15 @@ public sealed partial class CoberturaCoverageCalculator : ICoverageCalculator
             trimmed.StartsWith("/*", StringComparison.Ordinal) ||
             trimmed.StartsWith('*') ||
             trimmed.StartsWith('#') ||
-            trimmed.StartsWith("using ", StringComparison.Ordinal) ||
-            trimmed.StartsWith("namespace ", StringComparison.Ordinal) ||
+            UsingDirectivePattern().IsMatch(trimmed) ||
+            NamespacePattern().IsMatch(trimmed) ||
             trimmed.StartsWith('[') ||
-            DeclarationPattern().IsMatch(trimmed);
+            TypeDeclarationPattern().IsMatch(trimmed) ||
+            BodylessMethodPattern().IsMatch(trimmed) ||
+            AutoPropertyPattern().IsMatch(trimmed) ||
+            AccessorPattern().IsMatch(trimmed) ||
+            DeclarationOrParameterLinePattern().IsMatch(trimmed) ||
+            BodylessFieldPattern().IsMatch(trimmed);
     }
 
     private static CoverageResult Unmeasured(string reason) =>
@@ -279,6 +284,27 @@ public sealed partial class CoberturaCoverageCalculator : ICoverageCalculator
     [GeneratedRegex(@"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@")]
     private static partial Regex HunkPattern();
 
-    [GeneratedRegex(@"^(?:(?:public|private|protected|internal|static|sealed|abstract|partial|readonly|record|class|struct|interface|enum)\s+)+(?:[^=;]+)(?:\{|$)")]
-    private static partial Regex DeclarationPattern();
+    [GeneratedRegex(@"^(?:global\s+)?using\s+(?!var\b)(?!\()[\w.]+(?:\s*=\s*[\w.]+)?\s*;$")]
+    private static partial Regex UsingDirectivePattern();
+
+    [GeneratedRegex(@"^namespace\s+[\w.]+\s*(?:;|\{)?$")]
+    private static partial Regex NamespacePattern();
+
+    [GeneratedRegex(@"^(?:(?:public|private|protected|internal|static|sealed|abstract|partial|readonly|file)\s+)*(?:record(?:\s+(?:class|struct))?|class|struct|interface|enum|delegate)\s+[^=;{}]+(?:\{)?$")]
+    private static partial Regex TypeDeclarationPattern();
+
+    [GeneratedRegex(@"^(?:(?:public|private|protected|internal|static|virtual|abstract|override|partial|async|extern|unsafe|new)\s+)*[\w<>,.?\[\]]+\s+(?:\w+\.)?\w+(?:<[^>]+>)?\s*\([^;{}]*\)\s*;$")]
+    private static partial Regex BodylessMethodPattern();
+
+    [GeneratedRegex(@"^(?:(?:public|private|protected|internal|static|virtual|abstract|override|readonly|required|new)\s+)*[\w<>,.?\[\]]+\s+\w+\s*\{\s*(?:(?:(?:public|private|protected|internal)\s+)?(?:get|set|init);\s*)+\}\s*;?$")]
+    private static partial Regex AutoPropertyPattern();
+
+    [GeneratedRegex(@"^(?:(?:public|private|protected|internal)\s+)?(?:get|set|init);$")]
+    private static partial Regex AccessorPattern();
+
+    [GeneratedRegex(@"^(?!return\b|throw\b|await\b|new\b)(?:(?:public|private|protected|internal|static|readonly|required|ref|out|in)\s+)*[\w<>,.?\[\]]+\s+\w+\s*(?:,|\);)?$")]
+    private static partial Regex DeclarationOrParameterLinePattern();
+
+    [GeneratedRegex(@"^(?:(?:public|private|protected|internal|static|readonly|const|volatile|event|new)\s+)+[\w<>,.?\[\]]+\s+\w+\s*;$")]
+    private static partial Regex BodylessFieldPattern();
 }

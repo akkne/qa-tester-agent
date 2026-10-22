@@ -111,6 +111,52 @@ public sealed class CoberturaCoverageCalculatorTests
     }
 
     [Fact]
+    public async Task InterfaceMethodsAndAutoPropertiesDoNotRequireCoberturaLineMapping()
+    {
+        string workspace = NewWorkspace();
+        try
+        {
+            string report = await WriteReportAsync(workspace, """
+                <coverage><packages><package><classes>
+                  <class filename="src/Product/Service.cs"><lines><line number="8" hits="1" /></lines></class>
+                </classes></package></packages></coverage>
+                """);
+            GitSnapshot snapshot = Snapshot(workspace, """
+                diff --git a/src/Product/Contracts.cs b/src/Product/Contracts.cs
+                --- a/src/Product/Contracts.cs
+                +++ b/src/Product/Contracts.cs
+                @@ -0,0 +25,11 @@
+                +public interface IM3Executor
+                +{
+                +    Task<M3Result> ExecuteAsync(GitSnapshot snapshot, Guid runId, CancellationToken cancellationToken);
+                +    int Total { get; }
+                +    string Name { get; set; }
+                +    string Description
+                +    {
+                +        get;
+                +        init;
+                +    }
+                +}
+                diff --git a/src/Product/Service.cs b/src/Product/Service.cs
+                --- a/src/Product/Service.cs
+                +++ b/src/Product/Service.cs
+                @@ -7,0 +8 @@
+                +Run();
+                """);
+
+            var result = await new CoberturaCoverageCalculator().CalculateAsync(snapshot, [report], CancellationToken.None);
+
+            Assert.True(result.ChangedLines.IsMeasured);
+            Assert.Equal(1, result.ChangedLines.ExecutableLines);
+            Assert.Equal(1, result.ChangedLines.CoveredLines);
+        }
+        finally
+        {
+            Directory.Delete(workspace, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task ExcludesCommentsAndMovedLines()
     {
         string workspace = NewWorkspace();
