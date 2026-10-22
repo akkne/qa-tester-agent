@@ -46,7 +46,8 @@ jobs:
             exit 1
           fi
           python3 -c 'import json, os; print(json.dumps({"repository": os.environ["REPOSITORY"], "branch": os.environ["BRANCH"], "baseSha": os.environ["BASE_SHA"], "headSha": os.environ["HEAD_SHA"], "profileId": "demo"}))' \
-            | curl --fail-with-body --silent --show-error --connect-timeout 5 --max-time 30 --retry 2 \
+            | curl --fail-with-body --silent --show-error --connect-timeout 5 --max-time 30 \
+                --retry 4 --retry-connrefused --retry-delay 2 --retry-max-time 25 \
                 -H "X-Agent-Key: $AGENT_API_KEY" \
                 -H "Content-Type: application/json" \
                 --data-binary @- http://127.0.0.1:5080/api/runs

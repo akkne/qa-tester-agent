@@ -17,3 +17,5 @@
 Это локальная приёмка на контролируемом дефекте. Сквозной live-проход worker с настоящим LLM, реальной GitHub QA-веткой и страницей результата остаётся в `TODO.md` до настройки `Llm__BaseUrl` и `Llm__Model`.
 
 Код М5 отправлен в GitHub коммитами `a6db7e5` и `2d6a366`. [Workflow доставки](https://github.com/akkne/qa-tester-agent/actions/runs/39715655097) успешно передал диапазон `c14bf63..2d6a366` локальному API и создал запуск `61cb3065-e896-4c12-897b-2f1d11dde690`. API зафиксировал точный полный диапазон и завершил запуск `Blocked` до анализа с причиной: `M2 analysis requires Llm:Model, Llm:BaseUrl and an available LLM service.` Значения `Llm__Model` и `Llm__BaseUrl` в игнорируемом `.env.demo` сейчас пусты.
+
+После коммита с индикатором М5 сервис перезапускался во время следующего push. Первый [workflow](https://github.com/akkne/qa-tester-agent/actions/runs/39715902403) получил `connection refused`; его повтор успешно создал запуск `c70c1bcb-8020-4297-b9b4-5ba018951b7b` для `2d6a366..cde5998`. Он также завершился `Blocked` только из-за LLM. Workflow теперь повторяет отказ соединения с ограничением времени.
