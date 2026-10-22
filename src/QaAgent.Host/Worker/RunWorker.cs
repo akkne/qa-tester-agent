@@ -121,30 +121,11 @@ public sealed class RunWorker(
                         M3Result executed = await executor.ExecuteAsync(snapshot, run.Id, runTimeout.Token);
                         record.M3ResultJson = JsonSerializer.Serialize(executed);
                         await db.SaveChangesAsync(cancellationToken);
-                        if (!executed.StandAvailable || executed.BrowserPassed is null || executed.BrowserJson is null)
-                        {
-                            run.Block(executed.StandFailure ?? "M3 stand or browser was unavailable.", clock.UtcNow);
-                        }
-                        else if (executed.Checks.Values.Any(check => check.ExitCode == 125))
-                        {
-                            run.Block("M3 checks could not run in Docker.", clock.UtcNow);
-                        }
-                        else if (executed.TotalTests is null or 0 ||
-                                 executed.Coverage is null ||
-                                 !executed.Coverage.WholeProject.IsMeasured)
-                        {
-                            run.Block("M3 test or Coverlet results were not measured.", clock.UtcNow);
-                        }
-                        else if (executed.BrowserJson is not null &&
-                                 JsonDocument.Parse(executed.BrowserJson).RootElement.GetProperty("status").GetString() == "BLOCKED")
-                        {
-                            run.Block("M3 browser checks were blocked.", clock.UtcNow);
-                        }
+                        M3Outcome outcome = M3Outcome.From(executed);
+                        if (outcome.Status == RunStatus.Blocked)
+                            run.Block(outcome.Reason!, clock.UtcNow);
                         else
-                        {
-                            run.Complete(executed.AllChecksPassed && executed.BrowserPassed.Value
-                                ? RunStatus.Passed : RunStatus.Failed, clock.UtcNow);
-                        }
+                            run.Complete(outcome.Status, clock.UtcNow);
                     }
                 }
             }
