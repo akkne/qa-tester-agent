@@ -1,7 +1,9 @@
 using Microsoft.EntityFrameworkCore;
 using QaAgent.Application;
 using QaAgent.Application.Abstractions;
+using QaAgent.Application.Analysis;
 using QaAgent.Host.Worker;
+using QaAgent.Infrastructure.Analysis;
 using QaAgent.Infrastructure.Git;
 using QaAgent.Infrastructure.Persistence;
 using QaAgent.Infrastructure.Time;
@@ -38,6 +40,14 @@ public static class ServiceCollectionExtensions
             WorkspaceRoot = Path.GetFullPath(workspaceRoot)
         });
         services.AddSingleton<IGitWorkspace, GitCliWorkspace>();
+        if (!string.IsNullOrWhiteSpace(configuration["Llm:Model"]))
+        {
+            services.AddLlmClient(configuration);
+            services.AddScoped<IM2ContextReader, M2ContextReader>();
+            services.AddScoped<IM2TestBuilder, M2TestBuilder>();
+            services.AddScoped<ISecretScanner, DiffSecretScanner>();
+            services.AddScoped<M2Processor>();
+        }
         services.AddHostedService<RunWorker>();
         return services;
     }

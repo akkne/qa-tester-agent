@@ -57,6 +57,9 @@ namespace QaAgent.Infrastructure.Persistence.Migrations
                         .HasMaxLength(40)
                         .HasColumnType("character varying(40)");
 
+                    b.Property<string>("M2ResultJson")
+                        .HasColumnType("text");
+
                     b.Property<int>("ProfileVersion")
                         .HasColumnType("integer");
 

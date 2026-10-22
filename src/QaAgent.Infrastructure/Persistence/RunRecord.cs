@@ -15,4 +15,5 @@ public sealed class RunRecord
     public string? FailureReason { get; set; }
     public string? ChangedFilesJson { get; set; }
     public string? Diff { get; set; }
+    public string? M2ResultJson { get; set; }
 }

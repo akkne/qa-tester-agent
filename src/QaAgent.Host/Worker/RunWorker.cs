@@ -1,5 +1,6 @@
 using System.Text.Json;
 using QaAgent.Application.Abstractions;
+using QaAgent.Application.Analysis;
 using QaAgent.Domain;
 using QaAgent.Infrastructure.Persistence;
 
@@ -63,6 +64,7 @@ public sealed class RunWorker(
             return;
         }
 
+        bool gitPrepared = false;
         try
         {
             using CancellationTokenSource stageTimeout =
@@ -72,6 +74,7 @@ public sealed class RunWorker(
             IGitWorkspace git = scope.ServiceProvider.GetRequiredService<IGitWorkspace>();
             GitSnapshot snapshot = await git.PrepareAsync(
                 run.RepositoryId, run.BaseSha, run.HeadSha, stageTimeout.Token);
+            gitPrepared = true;
             RunDbContext db = scope.ServiceProvider.GetRequiredService<RunDbContext>();
             RunRecord record = await db.Runs.FindAsync([run.Id], cancellationToken)
                 ?? throw new InvalidOperationException("Run disappeared from the database.");
@@ -80,23 +83,54 @@ public sealed class RunWorker(
             await db.SaveChangesAsync(cancellationToken);
             try
             {
-                Directory.Delete(snapshot.WorkspacePath, recursive: true);
+                M2Processor? m2 = scope.ServiceProvider.GetService<M2Processor>();
+                if (m2 is null)
+                {
+                    run.Block("M2 analysis requires Llm:Model, Llm:BaseUrl and an available LLM service.", clock.UtcNow);
+                }
+                else
+                {
+                    const string profileId = "demo";
+                    IConfigurationSection section = configuration.GetSection($"Profiles:{profileId}");
+                    if (section.GetValue<int>("ProfileVersion") != run.ProfileVersion)
+                    {
+                        throw new InvalidOperationException("Stored profile version differs from the current demo profile.");
+                    }
+                    ProjectProfile profile = new(
+                        profileId,
+                        run.ProfileVersion,
+                        section["SpecificationDirectory"] ?? throw new InvalidOperationException("SpecificationDirectory is missing."),
+                        section.GetSection("AllowedTestDirectories").Get<string[]>() ?? [],
+                        section["AllowedReportDirectory"] ?? "revision");
+                    M2Result result = await m2.ProcessAsync(snapshot, profile, stageTimeout.Token);
+                    record.M2ResultJson = JsonSerializer.Serialize(result);
+                    await db.SaveChangesAsync(cancellationToken);
+                    run.Block(result.TestsCompile
+                        ? "M2 analysis and test generation complete; M3 execution is not implemented."
+                        : "M2 generated tests did not compile after two fixes: " + result.BuildDiagnostics,
+                        clock.UtcNow);
+                }
             }
-            catch (IOException exception)
+            finally
             {
-                logger.LogWarning(exception, "Could not remove workspace for run {RunId}", run.Id);
+                try
+                {
+                    Directory.Delete(snapshot.WorkspacePath, recursive: true);
+                }
+                catch (IOException exception)
+                {
+                    logger.LogWarning(exception, "Could not remove workspace for run {RunId}", run.Id);
+                }
             }
-
-            run.Block("Git range captured. Analysis and execution start in M2 and M3.", clock.UtcNow);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
-            run.Block("Git stage timed out.", clock.UtcNow);
+            run.Block(gitPrepared ? "M2 analysis timed out." : "Git stage timed out.", clock.UtcNow);
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
-            logger.LogError(exception, "Run {RunId} failed while preparing Git range", run.Id);
-            run.Block($"Git range unavailable: {exception.Message}", clock.UtcNow);
+            logger.LogError(exception, "Run {RunId} failed during Git or M2 analysis", run.Id);
+            run.Block($"{(gitPrepared ? "M2 analysis" : "Git range")} unavailable: {exception.Message}", clock.UtcNow);
         }
 
         await unitOfWork.Runs.UpdateAsync(run, cancellationToken);

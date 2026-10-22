@@ -4,6 +4,7 @@ using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using QaAgent.Application;
 using QaAgent.Application.Abstractions;
+using QaAgent.Application.Analysis;
 using QaAgent.Domain;
 using QaAgent.Infrastructure.Persistence;
 
@@ -134,11 +135,14 @@ public static class RunEndpoints
             return Results.NotFound();
         }
 
-        string? filesJson = await dbContext.Runs.Where(record => record.Id == id)
-            .Select(record => record.ChangedFilesJson).SingleAsync(cancellationToken);
-        IReadOnlyList<ChangedFile>? changedFiles = filesJson is null
+        var stored = await dbContext.Runs.Where(record => record.Id == id)
+            .Select(record => new { record.ChangedFilesJson, record.M2ResultJson }).SingleAsync(cancellationToken);
+        IReadOnlyList<ChangedFile>? changedFiles = stored.ChangedFilesJson is null
             ? null
-            : JsonSerializer.Deserialize<List<ChangedFile>>(filesJson);
+            : JsonSerializer.Deserialize<List<ChangedFile>>(stored.ChangedFilesJson);
+        M2Result? analysis = stored.M2ResultJson is null
+            ? null
+            : JsonSerializer.Deserialize<M2Result>(stored.M2ResultJson);
         return Results.Ok(new
         {
             run.Id,
@@ -152,7 +156,21 @@ public static class RunEndpoints
             run.CreatedAt,
             run.StartedAt,
             run.FinishedAt,
-            ChangedFiles = changedFiles
+            ChangedFiles = changedFiles,
+            Analysis = analysis is null ? null : new
+            {
+                analysis.RequirementIds,
+                analysis.Plan,
+                analysis.Findings,
+                Tests = analysis.Tests.Select(test => new { test.Path, test.RequirementIds, test.Kind }),
+                analysis.ContextGaps,
+                analysis.InputTokens,
+                analysis.OutputTokens,
+                analysis.GenerationFixes,
+                analysis.TestsCompile,
+                analysis.BuildDiagnostics,
+                analysis.SecretFindings
+            }
         });
     }
 
