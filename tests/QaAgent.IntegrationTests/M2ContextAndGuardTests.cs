@@ -21,6 +21,20 @@ public sealed class M2ContextAndGuardTests
     }
 
     [Fact]
+    public async Task SecretScannerDoesNotTreatTestVariablesAsHardCodedSecrets()
+    {
+        string diff = "diff --git a/demo/Demo.Tests/Test.cs b/demo/Demo.Tests/Test.cs\n" +
+            "+++ b/demo/Demo.Tests/Test.cs\n@@ -0,0 +1,2 @@\n" +
+            "+string password = oneNonWhitespace ? new string(' ', 11) + \"Z\" : new string('Z', 12);\n" +
+            "+Match token = Regex.Match(page, \"name=\\\"token\\\"\");\n";
+
+        IReadOnlyList<SecretFinding> findings = await new DiffSecretScanner().ScanAsync(
+            Snapshot("/tmp/workspace", [new ChangedFile("demo/Demo.Tests/Test.cs", "A")], diff), CancellationToken.None);
+
+        Assert.Empty(findings);
+    }
+
+    [Fact]
     public async Task ContextContainsChangedSourceButNotUnchangedSourceAndRedactsAssignment()
     {
         string root = Path.Combine(Path.GetTempPath(), "qa-m2-" + Guid.NewGuid().ToString("N"));

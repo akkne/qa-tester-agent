@@ -143,6 +143,6 @@ public sealed partial class M2ContextReader : IM2ContextReader
     [GeneratedRegex(@"(?m)^\|\s*([A-Z][A-Z0-9]+(?:-[A-Z0-9]+)+)\s*\|")]
     private static partial Regex RequirementIdRegex();
 
-    [GeneratedRegex(@"(?im)\b(api[_-]?key|token|secret|password)\s*[:=]\s*[^\s,;]+")]
+    [GeneratedRegex("""(?im)\b(api[_-]?key|token|secret|password)\s*['"]?\s*[:=]\s*(?:['"][^'"]{8,}['"]|[A-Za-z0-9_./+=-]{8,}(?=\s*(?:[,;#]|$)))""")]
     private static partial Regex SecretAssignmentRegex();
 }

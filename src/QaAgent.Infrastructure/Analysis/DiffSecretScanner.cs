@@ -57,6 +57,7 @@ public sealed partial class DiffSecretScanner : ISecretScanner
     [GeneratedRegex(@"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----")]
     private static partial Regex PrivateKeyRegex();
 
-    [GeneratedRegex("""(?i)\b(?:api[_-]?key|token|secret|password)\s*[:=]\s*['"]?[^\s'",;]{8,}""")]
+    // Require a literal value. A variable or method call named "password"/"token" is not a leaked secret.
+    [GeneratedRegex("""(?i)\b(?:api[_-]?key|token|secret|password)\s*['"]?\s*[:=]\s*(?:['"][^'"]{8,}['"]|[A-Za-z0-9_./+=-]{8,}(?=\s*(?:[,;#]|$)))""")]
     private static partial Regex AssignmentRegex();
 }
