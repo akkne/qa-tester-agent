@@ -56,14 +56,11 @@ public static class ServiceCollectionExtensions
             string.IsNullOrWhiteSpace(configuration["Agent:ResultBaseUrl"])
                 ? "http://127.0.0.1:5080"
                 : configuration["Agent:ResultBaseUrl"]!));
-        if (!string.IsNullOrWhiteSpace(configuration["Llm:Model"]))
-        {
-            services.AddLlmClient(configuration);
-            services.AddScoped<IM2ContextReader, M2ContextReader>();
-            services.AddScoped<IM2TestBuilder, M2TestBuilder>();
-            services.AddScoped<ISecretScanner, DiffSecretScanner>();
-            services.AddScoped<M2Processor>();
-        }
+        services.AddLlmClient(configuration);
+        services.AddScoped<IM2ContextReader, M2ContextReader>();
+        services.AddScoped<IM2TestBuilder, M2TestBuilder>();
+        services.AddScoped<ISecretScanner, DiffSecretScanner>();
+        services.AddScoped<M2Processor>();
         services.AddHostedService<RunWorker>();
         return services;
     }

@@ -91,7 +91,7 @@ public sealed class RunWorker(
                 M2Processor? m2 = scope.ServiceProvider.GetService<M2Processor>();
                 if (m2 is null)
                 {
-                    run.Block("M2 analysis requires Llm:Model, Llm:BaseUrl and an available LLM service.", clock.UtcNow);
+                    run.Block("M2 analysis requires an available Codex CLI LLM service.", clock.UtcNow);
                 }
                 else
                 {
