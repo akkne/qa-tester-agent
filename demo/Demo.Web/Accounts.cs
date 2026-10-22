@@ -67,6 +67,8 @@ public sealed class AccountService(IAccountStore store)
             return new(null, "Пароль должен содержать не менее 12 символов.", false);
         if (password.Length > 128)
             return new(null, "Пароль должен содержать не более 128 символов.", false);
+        if (string.IsNullOrWhiteSpace(password))
+            return new(null, "Пароль должен содержать хотя бы один непробельный символ.", false);
 
         Account account = new() { Id = Guid.NewGuid(), Email = email };
         account.PasswordHash = _passwordHasher.HashPassword(account, password);
