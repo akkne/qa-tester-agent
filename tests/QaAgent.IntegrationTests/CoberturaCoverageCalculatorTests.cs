@@ -169,6 +169,38 @@ public sealed class CoberturaCoverageCalculatorTests
     }
 
     [Fact]
+    public async Task MethodDeclarationsWithoutSequencePointsAreNotExecutableLines()
+    {
+        string workspace = NewWorkspace();
+        try
+        {
+            string report = await WriteReportAsync(workspace, """
+                <coverage><packages><package><classes>
+                  <class filename="src/Product/Service.cs"><lines><line number="3" hits="1" /></lines></class>
+                </classes></package></packages></coverage>
+                """);
+            GitSnapshot snapshot = Snapshot(workspace, """
+                diff --git a/src/Product/Service.cs b/src/Product/Service.cs
+                --- a/src/Product/Service.cs
+                +++ b/src/Product/Service.cs
+                @@ -0,0 +1,3 @@
+                +public static string Normalize(string value, IReadOnlyCollection<string> options)
+                +void Apply(JsonNode node)
+                +return value;
+                """);
+
+            var result = await new CoberturaCoverageCalculator().CalculateAsync(snapshot, [report], CancellationToken.None);
+
+            Assert.Equal(1, result.ChangedLines.ExecutableLines);
+            Assert.Equal(1, result.ChangedLines.CoveredLines);
+        }
+        finally
+        {
+            Directory.Delete(workspace, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task ExcludesCommentsAndMovedLines()
     {
         string workspace = NewWorkspace();

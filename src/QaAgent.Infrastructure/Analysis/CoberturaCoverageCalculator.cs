@@ -270,6 +270,7 @@ public sealed partial class CoberturaCoverageCalculator : ICoverageCalculator
             trimmed.StartsWith('[') ||
             TypeDeclarationPattern().IsMatch(trimmed) ||
             BodylessMethodPattern().IsMatch(trimmed) ||
+            MethodDeclarationPattern().IsMatch(trimmed) ||
             MethodHeaderPattern().IsMatch(trimmed) ||
             AutoPropertyPattern().IsMatch(trimmed) ||
             AccessorPattern().IsMatch(trimmed) ||
@@ -296,6 +297,9 @@ public sealed partial class CoberturaCoverageCalculator : ICoverageCalculator
 
     [GeneratedRegex(@"^(?:(?:public|private|protected|internal|static|virtual|abstract|override|partial|async|extern|unsafe|new)\s+)*[\w<>,.?\[\]]+\s+(?:\w+\.)?\w+(?:<[^>]+>)?\s*\([^;{}]*\)\s*;$")]
     private static partial Regex BodylessMethodPattern();
+
+    [GeneratedRegex(@"^(?:(?:public|private|protected|internal|static|virtual|abstract|override|partial|async|extern|unsafe|new)\s+)*[\w<>,.?\[\]]+\s+(?:\w+\.)?\w+(?:<[^>]+>)?\s*\([^;{}]*\)$")]
+    private static partial Regex MethodDeclarationPattern();
 
     [GeneratedRegex(@"^(?!return\b|throw\b|await\b|new\b)(?:(?:public|private|protected|internal|static|virtual|abstract|override|partial|async|extern|unsafe|new)\s+)*[\w<>,.?\[\] ]+\s+(?:\w+\.)?\w+(?:<[^>]+>)?\s*\($")]
     private static partial Regex MethodHeaderPattern();
