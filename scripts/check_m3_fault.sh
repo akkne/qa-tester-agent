@@ -3,7 +3,7 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 fixture_root="$(mktemp -d)"
-artifact_root="${1:-$repo_root/artifacts/m3-fault-evidence}"
+artifact_root="${1:-/tmp/qa-agent-m3-fault-evidence}"
 mkdir -p "$artifact_root"
 trap 'rm -rf "$fixture_root"' EXIT
 
