@@ -45,7 +45,7 @@ if (pipelineConfigured)
     app.MapRunEndpoints();
     app.MapGet("/healthz", async (RunDbContext db, CancellationToken cancellationToken) =>
         await db.Database.CanConnectAsync(cancellationToken)
-            ? Results.Ok(new { status = "ready", phase = "M4" })
+            ? Results.Ok(new { status = "ready", phase = "M5" })
             : Results.StatusCode(StatusCodes.Status503ServiceUnavailable));
 }
 else
