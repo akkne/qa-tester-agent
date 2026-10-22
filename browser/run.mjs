@@ -52,6 +52,7 @@ async function scenario(browser, name, baseUrl, artifacts) {
     await action();
   };
   const email = `browser-${name}-${randomUUID()}@example.test`;
+  const invalidEmail = `browser-invalid-${name}-${randomUUID()}@example.test`;
   const otherEmail = `browser-other-${randomUUID()}@example.test`;
   const password = 'browser-test-password-123';
   const failureArtifacts = {};
@@ -62,8 +63,21 @@ async function scenario(browser, name, baseUrl, artifacts) {
       assert.equal(await page.getByTestId('page-title').textContent(), 'Вход');
     });
 
+    await step('Whitespace-only password is rejected without creating an account', async () => {
+      await page.goto('/register');
+      await page.getByTestId('email-input').fill(invalidEmail);
+      await page.getByTestId('password-input').fill(' '.repeat(12));
+      await page.getByTestId('register-submit').click();
+      assert.equal(new URL(page.url()).pathname, '/register');
+      assert.match(await page.getByTestId('form-error').textContent(), /непробельный/);
+      const login = await context.request.post('/api/login', {
+        data: { email: invalidEmail, password: ' '.repeat(12) }
+      });
+      assert.equal(login.status(), 401);
+    });
+
     await step('Register using the form', async () => {
-      await page.getByTestId('register-link').click();
+      await page.goto('/register');
       assert.equal(await page.getByTestId('page-title').textContent(), 'Регистрация');
       assert.equal(await page.locator('label[for="email"]').count(), 1);
       assert.equal(await page.locator('label[for="password"]').count(), 1);
