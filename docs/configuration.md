@@ -24,6 +24,8 @@ Workflow использует GitHub secret `QA_AGENT_API_KEY` и, для пер
 
 После первой загрузки workflow можно запустить вручную через `workflow_dispatch`, указав два существующих SHA. Это позволяет проверить доставку без нового коммита; повтор того же диапазона вернёт прежний `runId`.
 
+На демонстрационном MacBook PostgreSQL запущен через `docker compose`, API — через пользовательский LaunchAgent `com.qa-agent.host`, а GitHub runner `qa-agent-mac` — через его `svc.sh`. После изменения кода API перезапускается командой `launchctl kickstart -k gui/$(id -u)/com.qa-agent.host`; готовность проверяется через `http://127.0.0.1:5080/healthz`. Локальные настройки и ключ API находятся только в игнорируемом `.env.demo`. GitHub secret `QA_AGENT_API_KEY` и переменная `QA_INITIAL_BASE_SHA` настроены для приватного репозитория.
+
 ## Значения и проверка
 
 - Профиль фиксирует версию. Изменение команд/путей увеличивает `ProfileVersion` и участвует в ключе идемпотентности.
