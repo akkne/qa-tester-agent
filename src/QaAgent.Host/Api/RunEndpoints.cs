@@ -24,6 +24,8 @@ public static class RunEndpoints
     {
         endpoints.MapPost("/api/runs", CreateRunAsync);
         endpoints.MapGet("/api/runs/{id:guid}", GetRunAsync);
+        endpoints.MapGet("/runs/{id:guid}", GetRunPageAsync);
+        endpoints.MapGet("/runs/{id:guid}/artifacts/{artifactId}", GetArtifactAsync);
         return endpoints;
     }
 
@@ -137,7 +139,7 @@ public static class RunEndpoints
         }
 
         var stored = await dbContext.Runs.Where(record => record.Id == id)
-            .Select(record => new { record.ChangedFilesJson, record.M2ResultJson, record.M3ResultJson }).SingleAsync(cancellationToken);
+            .Select(record => new { record.ChangedFilesJson, record.M2ResultJson, record.M3ResultJson, record.M4ResultJson }).SingleAsync(cancellationToken);
         IReadOnlyList<ChangedFile>? changedFiles = stored.ChangedFilesJson is null
             ? null
             : JsonSerializer.Deserialize<List<ChangedFile>>(stored.ChangedFilesJson);
@@ -147,9 +149,13 @@ public static class RunEndpoints
         M3Result? execution = stored.M3ResultJson is null
             ? null
             : JsonSerializer.Deserialize<M3Result>(stored.M3ResultJson);
+        PublishedReport? publication = stored.M4ResultJson is null
+            ? null
+            : JsonSerializer.Deserialize<PublishedReport>(stored.M4ResultJson);
         return Results.Ok(new
         {
             run.Id,
+            PageUrl = $"/runs/{run.Id}",
             run.RepositoryId,
             BaseSha = run.BaseSha.Value,
             HeadSha = run.HeadSha.Value,
@@ -175,13 +181,128 @@ public static class RunEndpoints
                 analysis.BuildDiagnostics,
                 analysis.SecretFindings
             },
-            Execution = execution
+            Execution = execution,
+            Publication = publication
         });
+    }
+
+    private static async Task<IResult> GetRunPageAsync(Guid id, HttpContext context,
+        IConfiguration configuration, RunDbContext db, CancellationToken cancellationToken)
+    {
+        if (!BrowserAuthorized(context, configuration)) return Challenge(context);
+        RunRecord? record = await db.Runs.AsNoTracking().SingleOrDefaultAsync(run => run.Id == id, cancellationToken);
+        if (record is null) return Results.NotFound();
+        M2Result? analysis = record.M2ResultJson is null ? null : JsonSerializer.Deserialize<M2Result>(record.M2ResultJson);
+        M3Result? execution = record.M3ResultJson is null ? null : JsonSerializer.Deserialize<M3Result>(record.M3ResultJson);
+        PublishedReport? publication = record.M4ResultJson is null ? null : JsonSerializer.Deserialize<PublishedReport>(record.M4ResultJson);
+        static string Escape(string? value) => System.Net.WebUtility.HtmlEncode(value ?? "");
+        StringBuilder html = new("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>QA result</title><style>body{font:16px system-ui,sans-serif;max-width:880px;margin:3rem auto;padding:0 1rem;color:#1b2633}h1{font-size:1.8rem}section{border-top:1px solid #ccd3db;padding:1rem 0}code{overflow-wrap:anywhere}li{margin:.4rem 0}.status{font-weight:700}a{color:#0759a5}</style></head><body>");
+        html.Append("<h1>QA result</h1><p class=\"status\">Status: ").Append(Escape(record.FinalStatus ?? record.State))
+            .Append("</p><p>Run <code>").Append(id).Append("</code></p><p>Range <code>")
+            .Append(Escape(record.BaseSha)).Append(".. ").Append(Escape(record.HeadSha)).Append("</code></p>");
+        if (record.FailureReason is not null) html.Append("<p>Reason: ").Append(Escape(record.FailureReason)).Append("</p>");
+        if (record.StartedAt is { } started && record.FinishedAt is { } finished)
+            html.Append("<p>Duration: ").Append((finished - started).TotalSeconds.ToString("F1", System.Globalization.CultureInfo.InvariantCulture)).Append(" seconds</p>");
+        if (analysis is not null)
+        {
+            html.Append("<section><h2>Analysis</h2><p>LLM tokens: ").Append(analysis.InputTokens)
+                .Append(" input, ").Append(analysis.OutputTokens).Append(" output</p><h3>Requirements</h3><ul>");
+            foreach (string requirement in analysis.RequirementIds) html.Append("<li><code>").Append(Escape(requirement)).Append("</code></li>");
+            html.Append("</ul><h3>Candidate tests</h3><ul>");
+            foreach (GeneratedTest test in analysis.Tests) html.Append("<li><code>").Append(Escape(test.Path))
+                .Append("</code> — ").Append(Escape(test.Kind)).Append("</li>");
+            html.Append("</ul><h3>Findings</h3><ul>");
+            foreach (AnalysisFinding finding in analysis.Findings) html.Append("<li>").Append(Escape(finding.Status))
+                .Append(": ").Append(Escape(finding.Path)).Append(':').Append(finding.Line).Append(" — ")
+                .Append(Escape(finding.Observed)).Append("</li>");
+            html.Append("</ul></section>");
+        }
+        if (execution is not null)
+        {
+            html.Append("<section><h2>Execution</h2><p>Tests: ").Append(execution.TotalTests?.ToString() ?? "unavailable")
+                .Append(" total, ").Append(execution.FailedTests?.ToString() ?? "unavailable").Append(" failed</p><ul>");
+            foreach ((string name, StageCheckResult check) in execution.Checks)
+                html.Append("<li>").Append(Escape(name)).Append(": ").Append(check.Passed ? "passed" : "failed").Append("</li>");
+            html.Append("</ul><p>Browser: ").Append(execution.BrowserPassed?.ToString() ?? "not run").Append("</p>");
+            if (execution.Coverage is { } coverage)
+                html.Append("<p>Changed line coverage: ").Append(coverage.ChangedLines.Percent?.ToString() ?? "unavailable").Append("%</p>");
+            html.Append("</section>");
+        }
+        if (publication is not null)
+        {
+            html.Append("<section><h2>Publication and evidence</h2>");
+            if (publication.ReportUrl is not null) html.Append("<p><a href=\"").Append(Escape(publication.ReportUrl)).Append("\">GitHub report</a></p>");
+            if (publication.BranchUrl is not null) html.Append("<p><a href=\"").Append(Escape(publication.BranchUrl)).Append("\">QA branch</a></p>");
+            if (publication.PublishError is not null) html.Append("<p>").Append(Escape(publication.PublishError)).Append("</p>");
+            html.Append("<ul>");
+            foreach (PublishedArtifact artifact in publication.Artifacts)
+                html.Append("<li><a href=\"/runs/").Append(id).Append("/artifacts/").Append(Escape(artifact.Id))
+                    .Append("\">").Append(Escape(artifact.Name)).Append("</a></li>");
+            html.Append("</ul></section>");
+        }
+        html.Append("</body></html>");
+        return Results.Content(html.ToString(), "text/html; charset=utf-8");
+    }
+
+    private static async Task<IResult> GetArtifactAsync(Guid id, string artifactId, HttpContext context,
+        IConfiguration configuration, RunDbContext db, CancellationToken cancellationToken)
+    {
+        if (!BrowserAuthorized(context, configuration)) return Challenge(context);
+        string? json = await db.Runs.AsNoTracking().Where(run => run.Id == id)
+            .Select(run => run.M4ResultJson).SingleOrDefaultAsync(cancellationToken);
+        if (json is null) return Results.NotFound();
+        PublishedReport? publication = JsonSerializer.Deserialize<PublishedReport>(json);
+        PublishedArtifact? artifact = publication?.Artifacts.SingleOrDefault(item => item.Id == artifactId);
+        if (artifact is null) return Results.NotFound();
+        string configuredRoot = Path.GetFullPath(configuration["Agent:ArtifactRoot"] ?? "artifacts");
+        string runRoot = Path.GetFullPath(Path.Combine(configuredRoot, id.ToString("N")));
+        string file = Path.GetFullPath(Path.Combine(runRoot, artifact.RelativePath));
+        if (!file.StartsWith(runRoot + Path.DirectorySeparatorChar, StringComparison.Ordinal) || !File.Exists(file))
+            return Results.NotFound();
+        string relative = Path.GetRelativePath(runRoot, file);
+        string cursor = runRoot;
+        foreach (string part in relative.Split(Path.DirectorySeparatorChar))
+        {
+            cursor = Path.Combine(cursor, part);
+            if ((File.GetAttributes(cursor) & FileAttributes.ReparsePoint) != 0) return Results.NotFound();
+        }
+        string contentType = Path.GetExtension(file).ToLowerInvariant() switch
+        {
+            ".png" => "image/png",
+            ".json" => "application/json",
+            ".xml" => "application/xml",
+            ".log" => "text/plain; charset=utf-8",
+            _ => "application/octet-stream"
+        };
+        return Results.File(file, contentType);
+    }
+
+    private static IResult Challenge(HttpContext context)
+    {
+        context.Response.Headers.WWWAuthenticate = "Basic realm=\"QA Agent\"";
+        return Results.Json(new { error = "Use HTTP Basic authentication with the agent API key as password." }, statusCode: 401);
+    }
+
+    private static bool BrowserAuthorized(HttpContext context, IConfiguration configuration)
+    {
+        string header = context.Request.Headers.Authorization.ToString();
+        if (!header.StartsWith("Basic ", StringComparison.OrdinalIgnoreCase)) return false;
+        try
+        {
+            string decoded = Encoding.UTF8.GetString(Convert.FromBase64String(header[6..]));
+            string password = decoded[(decoded.IndexOf(':') + 1)..];
+            string? expected = configuration["AgentApi:Key"];
+            if (string.IsNullOrEmpty(expected) || decoded.IndexOf(':') < 0) return false;
+            byte[] expectedHash = SHA256.HashData(Encoding.UTF8.GetBytes(expected));
+            byte[] suppliedHash = SHA256.HashData(Encoding.UTF8.GetBytes(password));
+            return CryptographicOperations.FixedTimeEquals(expectedHash, suppliedHash);
+        }
+        catch (FormatException) { return false; }
     }
 
     private static IResult Accepted(Run run, bool duplicate) => Results.Accepted(
         $"/api/runs/{run.Id}",
-        new { RunId = run.Id, State = run.State.ToString(), ResultUrl = $"/api/runs/{run.Id}", Duplicate = duplicate });
+        new { RunId = run.Id, State = run.State.ToString(), ResultUrl = $"/api/runs/{run.Id}", PageUrl = $"/runs/{run.Id}", Duplicate = duplicate });
 
     private static bool Authorized(HttpContext context, IConfiguration configuration)
     {

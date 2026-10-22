@@ -17,4 +17,5 @@ public sealed class RunRecord
     public string? Diff { get; set; }
     public string? M2ResultJson { get; set; }
     public string? M3ResultJson { get; set; }
+    public string? M4ResultJson { get; set; }
 }

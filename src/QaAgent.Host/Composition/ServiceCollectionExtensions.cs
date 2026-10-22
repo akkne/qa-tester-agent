@@ -8,6 +8,7 @@ using QaAgent.Infrastructure.Analysis;
 using QaAgent.Infrastructure.Execution;
 using QaAgent.Infrastructure.Git;
 using QaAgent.Infrastructure.Persistence;
+using QaAgent.Infrastructure.Publishing;
 using QaAgent.Infrastructure.Time;
 
 namespace QaAgent.Host.Composition;
@@ -46,6 +47,15 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IM3Executor>(provider => new DockerM3Executor(
             configuration["Agent:ArtifactRoot"] ?? "artifacts",
             provider.GetRequiredService<ICoverageCalculator>()));
+        services.AddScoped<IReportPublisher>(_ => new GitReportPublisher(
+            configuration["Agent:ArtifactRoot"] ?? "artifacts",
+            string.IsNullOrWhiteSpace(configuration["GitHub:PublishRemote"])
+                ? $"https://github.com/{configuration["GitHub:Repository"]}.git"
+                : configuration["GitHub:PublishRemote"]!,
+            configuration["GitHub:Token"],
+            string.IsNullOrWhiteSpace(configuration["Agent:ResultBaseUrl"])
+                ? "http://127.0.0.1:5080"
+                : configuration["Agent:ResultBaseUrl"]!));
         if (!string.IsNullOrWhiteSpace(configuration["Llm:Model"]))
         {
             services.AddLlmClient(configuration);

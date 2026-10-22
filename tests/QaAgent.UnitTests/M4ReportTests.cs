@@ -1,0 +1,35 @@
+using QaAgent.Application.Abstractions;
+using QaAgent.Application.Analysis;
+using QaAgent.Application.Execution;
+using QaAgent.Application.Publishing;
+using QaAgent.Domain;
+
+namespace QaAgent.UnitTests;
+
+public sealed class M4ReportTests
+{
+    [Fact]
+    public void EscapesUntrustedFindingAndIncludesCoverageAndTokenUsage()
+    {
+        string baseSha = new('a', 40);
+        string headSha = new('b', 40);
+        Run run = Run.Queue(Guid.NewGuid(), "owner/repo", CommitSha.Parse(baseSha),
+            CommitSha.Parse(headSha), 3, DateTimeOffset.UtcNow);
+        GitSnapshot snapshot = new("/tmp/workspace", CommitSha.Parse(baseSha), CommitSha.Parse(headSha),
+            [new ChangedFile("demo/file.cs", "M")], "");
+        M2Result analysis = new(["REQ-1"], [],
+            [new AnalysisFinding("REQ-1", "demo/file.cs", 3, "high", "safe", "<script>alert(1)</script>",
+                "open page", "hypothesis")], [], [], 321, 123, 1, true, null, []);
+        M3Result execution = new(headSha, "/tmp/artifacts", new Dictionary<string, StageCheckResult>(),
+            4, 1, new CoverageResult(new CoverageMetric(4, 8), new CoverageMetric(1, 2)),
+            true, null, false, "failed");
+
+        string report = MarkdownReportRenderer.Render(run, snapshot, analysis, execution, RunStatus.Failed,
+            [], "http://127.0.0.1:5080");
+
+        Assert.Contains("321 input, 123 output", report);
+        Assert.Contains("Changed executable line coverage:** 50", report);
+        Assert.Contains("&lt;script&gt;", report);
+        Assert.DoesNotContain("<script>", report);
+    }
+}

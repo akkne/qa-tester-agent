@@ -63,6 +63,9 @@ namespace QaAgent.Infrastructure.Persistence.Migrations
                     b.Property<string>("M3ResultJson")
                         .HasColumnType("text");
 
+                    b.Property<string>("M4ResultJson")
+                        .HasColumnType("text");
+
                     b.Property<int>("ProfileVersion")
                         .HasColumnType("integer");
 

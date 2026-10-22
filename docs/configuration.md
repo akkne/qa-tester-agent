@@ -28,6 +28,8 @@ Workflow использует GitHub secret `QA_AGENT_API_KEY` и, для пер
 
 На демонстрационном MacBook PostgreSQL запущен через `docker compose`, API — через пользовательский LaunchAgent `com.qa-agent.host`, а GitHub runner `qa-agent-mac` — через его `svc.sh`. После изменения кода API перезапускается командой `launchctl kickstart -k gui/$(id -u)/com.qa-agent.host`; готовность проверяется через `http://127.0.0.1:5080/healthz`. Локальные настройки и ключ API находятся только в игнорируемом `.env.demo`. GitHub secret `QA_AGENT_API_KEY` и переменная `QA_INITIAL_BASE_SHA` настроены для приватного репозитория.
 
+Для М4 `GitHub__Token` в `.env.demo` нужен для push QA-ветки, если у Git credential helper нет прав записи. Publisher передаёт токен Git через временный askpass-скрипт, не помещая его в URL или аргументы процесса. `GitHub__PublishRemote` можно задать для отдельного remote; по умолчанию используется `https://github.com/<GitHub__Repository>.git`. `Agent__ResultBaseUrl` задаёт локальный адрес страницы результата в Markdown-отчёте (по умолчанию `http://127.0.0.1:5080`). Страница открывает HTTP Basic запрос: в качестве пароля введите `AgentApi__Key`; логин может быть произвольным. Ссылки на локальные доказательства работают на MacBook с запущенным сервисом.
+
 ## Значения и проверка
 
 - Профиль фиксирует версию. Изменение команд/путей увеличивает `ProfileVersion` и участвует в ключе идемпотентности.

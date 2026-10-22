@@ -67,6 +67,7 @@ public sealed class RunWorker(
 
         bool gitPrepared = false;
         bool m3Started = false;
+        bool m4Started = false;
         try
         {
             using CancellationTokenSource runTimeout =
@@ -122,7 +123,15 @@ public sealed class RunWorker(
                         record.M3ResultJson = JsonSerializer.Serialize(executed);
                         await db.SaveChangesAsync(cancellationToken);
                         M3Outcome outcome = M3Outcome.From(executed);
-                        if (outcome.Status == RunStatus.Blocked)
+                        m4Started = true;
+                        IReportPublisher publisher = scope.ServiceProvider.GetRequiredService<IReportPublisher>();
+                        PublishedReport publication = await publisher.PublishAsync(
+                            run, snapshot, profile, result, executed, outcome.Status, runTimeout.Token);
+                        record.M4ResultJson = JsonSerializer.Serialize(publication);
+                        await db.SaveChangesAsync(cancellationToken);
+                        if (publication.PublishError is not null)
+                            run.Block(publication.PublishError, clock.UtcNow);
+                        else if (outcome.Status == RunStatus.Blocked)
                             run.Block(outcome.Reason!, clock.UtcNow);
                         else
                             run.Complete(outcome.Status, clock.UtcNow);
@@ -143,12 +152,12 @@ public sealed class RunWorker(
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
-            run.Block(m3Started ? "M3 execution timed out." : gitPrepared ? "M2 analysis timed out." : "Git stage timed out.", clock.UtcNow);
+            run.Block(m4Started ? "M4 publication timed out." : m3Started ? "M3 execution timed out." : gitPrepared ? "M2 analysis timed out." : "Git stage timed out.", clock.UtcNow);
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
-            logger.LogError(exception, "Run {RunId} failed during Git, M2, or M3", run.Id);
-            run.Block($"{(m3Started ? "M3 execution" : gitPrepared ? "M2 analysis" : "Git range")} unavailable: {exception.Message}", clock.UtcNow);
+            logger.LogError(exception, "Run {RunId} failed during Git, M2, M3, or M4", run.Id);
+            run.Block($"{(m4Started ? "M4 publication" : m3Started ? "M3 execution" : gitPrepared ? "M2 analysis" : "Git range")} unavailable: {exception.Message}", clock.UtcNow);
         }
 
         await unitOfWork.Runs.UpdateAsync(run, cancellationToken);
