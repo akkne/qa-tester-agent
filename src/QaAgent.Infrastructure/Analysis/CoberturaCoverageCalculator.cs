@@ -270,6 +270,7 @@ public sealed partial class CoberturaCoverageCalculator : ICoverageCalculator
             trimmed.StartsWith('[') ||
             TypeDeclarationPattern().IsMatch(trimmed) ||
             BodylessMethodPattern().IsMatch(trimmed) ||
+            MethodHeaderPattern().IsMatch(trimmed) ||
             AutoPropertyPattern().IsMatch(trimmed) ||
             AccessorPattern().IsMatch(trimmed) ||
             DeclarationOrParameterLinePattern().IsMatch(trimmed) ||
@@ -296,13 +297,16 @@ public sealed partial class CoberturaCoverageCalculator : ICoverageCalculator
     [GeneratedRegex(@"^(?:(?:public|private|protected|internal|static|virtual|abstract|override|partial|async|extern|unsafe|new)\s+)*[\w<>,.?\[\]]+\s+(?:\w+\.)?\w+(?:<[^>]+>)?\s*\([^;{}]*\)\s*;$")]
     private static partial Regex BodylessMethodPattern();
 
+    [GeneratedRegex(@"^(?!return\b|throw\b|await\b|new\b)(?:(?:public|private|protected|internal|static|virtual|abstract|override|partial|async|extern|unsafe|new)\s+)*[\w<>,.?\[\] ]+\s+(?:\w+\.)?\w+(?:<[^>]+>)?\s*\($")]
+    private static partial Regex MethodHeaderPattern();
+
     [GeneratedRegex(@"^(?:(?:public|private|protected|internal|static|virtual|abstract|override|readonly|required|new)\s+)*[\w<>,.?\[\]]+\s+\w+\s*\{\s*(?:(?:(?:public|private|protected|internal)\s+)?(?:get|set|init);\s*)+\}\s*;?$")]
     private static partial Regex AutoPropertyPattern();
 
     [GeneratedRegex(@"^(?:(?:public|private|protected|internal)\s+)?(?:get|set|init);$")]
     private static partial Regex AccessorPattern();
 
-    [GeneratedRegex(@"^(?!return\b|throw\b|await\b|new\b)(?:(?:public|private|protected|internal|static|readonly|required|ref|out|in)\s+)*[\w<>,.?\[\]]+\s+\w+\s*(?:,|\);)?$")]
+    [GeneratedRegex(@"^(?!return\b|throw\b|await\b|new\b)(?:(?:public|private|protected|internal|static|readonly|required|ref|out|in)\s+)*[\w<>,.?\[\] ]+\s+\w+\s*(?:,|\)|\);)?$")]
     private static partial Regex DeclarationOrParameterLinePattern();
 
     [GeneratedRegex(@"^(?:(?:public|private|protected|internal|static|readonly|const|volatile|event|new)\s+)+[\w<>,.?\[\]]+\s+\w+\s*;$")]

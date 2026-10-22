@@ -125,7 +125,7 @@ public sealed class CoberturaCoverageCalculatorTests
                 diff --git a/src/Product/Contracts.cs b/src/Product/Contracts.cs
                 --- a/src/Product/Contracts.cs
                 +++ b/src/Product/Contracts.cs
-                @@ -0,0 +25,11 @@
+                @@ -0,0 +25,14 @@
                 +public interface IM3Executor
                 +{
                 +    Task<M3Result> ExecuteAsync(GitSnapshot snapshot, Guid runId, CancellationToken cancellationToken);
@@ -136,6 +136,18 @@ public sealed class CoberturaCoverageCalculatorTests
                 +        get;
                 +        init;
                 +    }
+                +    Task<M3Result> ExecuteLaterAsync(
+                +        GitSnapshot snapshot,
+                +        CancellationToken cancellationToken);
+                +}
+                diff --git a/src/Product/Result.cs b/src/Product/Result.cs
+                --- a/src/Product/Result.cs
+                +++ b/src/Product/Result.cs
+                @@ -0,0 +1,5 @@
+                +public sealed record Result(
+                +    IReadOnlyDictionary<string, int> Checks,
+                +    string? BrowserJson)
+                +{
                 +}
                 diff --git a/src/Product/Service.cs b/src/Product/Service.cs
                 --- a/src/Product/Service.cs
