@@ -1,13 +1,11 @@
-using Microsoft.AspNetCore.Mvc.Testing;
-
 namespace Demo.Tests;
 
-public sealed class SmokeTests(WebApplicationFactory<Program> factory)
-    : IClassFixture<WebApplicationFactory<Program>>
+public sealed class SmokeTests
 {
     [Fact]
     public async Task Home_page_has_a_stable_title()
     {
+        using DemoWebFactory factory = new();
         using HttpClient client = factory.CreateClient();
         string html = await client.GetStringAsync("/");
         Assert.Contains("data-testid=\"page-title\"", html);
@@ -17,6 +15,7 @@ public sealed class SmokeTests(WebApplicationFactory<Program> factory)
     [Fact]
     public async Task Healthcheck_is_ready()
     {
+        using DemoWebFactory factory = new();
         using HttpClient client = factory.CreateClient();
         string health = await client.GetStringAsync("/healthz");
         Assert.Contains("ready", health);
