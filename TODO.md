@@ -8,6 +8,7 @@
 ## Внешний блокер М4
 
 - После настройки LLM и live worker-прохода проверить GitHub push ветки `qa/<short-sha>-<run-id>`, ссылку `Publication.ReportUrl` в `GET /api/runs/{id}` и открытие `GET /runs/{id}` в браузере с HTTP Basic (пароль `AgentApi__Key`). Если Git credential helper не имеет права записи, задать `GitHub__Token` в игнорируемом `.env.demo`. Локальная публикация в bare Git remote и выдача отчёта уже проверены; см. `docs/m4-evidence.md`.
+- Последняя реальная доставка workflow: запуск `baa1e67f-5363-415e-b6ef-07142ad229fb` завершился `BLOCKED` до М3/М4, так как `Llm:Model` и `Llm:BaseUrl` не настроены. После установки этих значений отправить новый push с требованием либо вручную вызвать workflow с новым диапазоном существующих SHA.
 
 ## Следующая фаза
 
