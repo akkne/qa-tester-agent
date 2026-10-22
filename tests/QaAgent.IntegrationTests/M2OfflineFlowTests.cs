@@ -17,7 +17,7 @@ public sealed class M2OfflineFlowTests
         string clone = Path.Combine(Path.GetTempPath(), "qa-m2-clone-" + Guid.NewGuid().ToString("N"));
         try
         {
-            await RunAsync(repo, "git", "clone", "--quiet", "--local", repo, clone);
+            await RunAsync(repo, "git", "clone", "--quiet", "--no-hardlinks", repo, clone);
             string head = (await RunAsync(clone, "git", "rev-parse", "HEAD")).Trim();
             string featureCommit = (await RunAsync(clone, "git", "log", "-1", "--format=%H", "--", "demo/Demo.Web")).Trim();
             string baseSha = (await RunAsync(clone, "git", "rev-parse", featureCommit + "^")).Trim();
