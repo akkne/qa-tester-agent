@@ -22,3 +22,6 @@ TestResults/
 .DS_Store
 __pycache__/
 *.pyc
+
+# Local AI tooling state (oh-my-claudecode)
+.omc/
