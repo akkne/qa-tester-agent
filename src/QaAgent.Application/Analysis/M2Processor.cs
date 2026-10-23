@@ -72,6 +72,8 @@ public sealed class M2Processor(ILlmClient llm, IM2ContextReader contextReader, 
             "Assert the specified behavior even if the product is currently broken. " +
             "The build treats analyzer and code-style warnings as errors: follow the supplied .editorconfig, " +
             "always use braces for if/for/foreach/while bodies, and avoid unused usings or variables. " +
+            "Tests run offline in a Linux .NET SDK container without python, node or network access: " +
+            "do not start external processes or test CI workflow files; test the product's C# code. " +
             "Only add new .cs files under these directories: " + string.Join(", ", profile.AllowedTestDirectories) +
             ". Never edit product code, existing tests, or use Skip. Context:\n" + taskContext +
             "\nVerification plan:\n" + planResponse.Json;

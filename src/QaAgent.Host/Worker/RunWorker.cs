@@ -170,10 +170,54 @@ public sealed class RunWorker(
                     await git.ResetAsync(snapshot, runTimeout.Token);
                     executed = await executor.ExecuteAsync(snapshot, run.Id, runTimeout.Token);
                 }
+                M3Outcome outcome = M3Outcome.From(executed);
+                if (outcome.Status == RunStatus.Failed && result.Tests.Count > 0)
+                {
+                    // Generated tests are hypotheses. Check the product without them so that a test that only
+                    // fails in the container (or encodes a wrong guess) cannot fail the push on its own.
+                    await TraceAsync("Execution", "Checks failed with generated tests; repeating checks without them.");
+                    string generatedFailure = executed.Checks.TryGetValue("test", out StageCheckResult? failedTest)
+                        ? failedTest.Summary : "";
+                    string generatedLog = Path.Combine(executed.ArtifactDirectory, "generated-tests-test.log");
+                    if (failedTest is not null && File.Exists(failedTest.LogPath))
+                        File.Copy(failedTest.LogPath, generatedLog, overwrite: true);
+                    await git.ResetAsync(snapshot, runTimeout.Token);
+                    M3Result baseline = await executor.ExecuteAsync(snapshot, run.Id, runTimeout.Token);
+                    M3Outcome baselineOutcome = M3Outcome.From(baseline);
+                    if (baselineOutcome.Status == RunStatus.Passed)
+                    {
+                        result = result with
+                        {
+                            ContextGaps = [.. result.ContextGaps,
+                                $"Repository checks pass without the generated tests; {executed.FailedTests?.ToString() ?? "some"} " +
+                                "generated tests failed and need review on the QA branch: " + Shorten(generatedFailure)]
+                        };
+                        executed = baseline;
+                        outcome = new M3Outcome(RunStatus.NeedsReview, null);
+                    }
+                    else
+                    {
+                        result = result with
+                        {
+                            ContextGaps = [.. result.ContextGaps,
+                                "Repository checks also fail without the generated tests."]
+                        };
+                        executed = baseline;
+                        outcome = baselineOutcome;
+                    }
+
+                    // The QA branch keeps the generated tests for review, so put them back for publication.
+                    foreach (GeneratedTest test in result.Tests)
+                    {
+                        string path = Path.Combine(snapshot.WorkspacePath, test.Path.Replace('\\', '/'));
+                        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                        await File.WriteAllTextAsync(path, test.Source, runTimeout.Token);
+                    }
+                    record.M2ResultJson = JsonSerializer.Serialize(result);
+                }
                 await TraceAsync("Execution", $"Tests: {executed.TotalTests?.ToString() ?? "unavailable"} total, {executed.FailedTests?.ToString() ?? "unavailable"} failed.");
                 record.M3ResultJson = JsonSerializer.Serialize(executed);
                 await db.SaveChangesAsync(cancellationToken);
-                M3Outcome outcome = M3Outcome.From(executed);
                 m4Started = true;
                 await TraceAsync("Publication", "Publishing the QA branch and report.");
                 IReportPublisher publisher = scope.ServiceProvider.GetRequiredService<IReportPublisher>();

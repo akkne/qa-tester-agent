@@ -114,7 +114,7 @@ jobs:
           execution = run.get("execution") or {}
           publication = run.get("publication") or {}
           analysis = run.get("analysis") or {}
-          icon = {"Passed": "✅", "Failed": "❌"}.get(status, "⛔")
+          icon = {"Passed": "✅", "NeedsReview": "⚠️", "Failed": "❌"}.get(status, "⛔")
           lines = [f"## {icon} QA agent: {status.upper()}", "",
               "| | |", "| --- | --- |",
               f"| Range | `{base[:12]}..{head[:12]}` |",
@@ -144,6 +144,8 @@ jobs:
               print(f"QA branch: {publication['branchUrl']}")
           if status == "Passed":
               print("::notice title=QA agent::Passed")
+          elif status == "NeedsReview":
+              print(f"::warning title=QA agent::Repository checks passed; generated tests need review: {publication.get('reportUrl') or page}")
           elif status == "Failed":
               print(f"::error title=QA agent::Checks failed. Report: {publication.get('reportUrl') or page}")
               sys.exit(1)
