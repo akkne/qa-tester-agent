@@ -12,6 +12,7 @@
 
 # Local runs and browser artifacts
 artifacts/
+activity/
 worktrees/
 test-results/
 playwright-report/

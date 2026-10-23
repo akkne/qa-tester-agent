@@ -20,6 +20,8 @@ public static class LlmServiceCollectionExtensions
         }
 
         services.AddSingleton(options);
+        services.AddSingleton<ICodexActivityStore>(new FileCodexActivityStore(
+            configuration["Agent:ActivityRoot"] ?? "activity"));
         services.AddSingleton<ICodexExecRunner, CodexExecRunner>();
         services.AddTransient<ILlmClient, CodexExecLlmClient>();
         return services;

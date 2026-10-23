@@ -70,6 +70,19 @@ public sealed class RunTests
         Assert.Equal("Git object missing", restored.FailureReason);
     }
 
+    [Fact]
+    public void A_retry_attempt_is_kept_and_must_be_positive()
+    {
+        CommitSha baseSha = CommitSha.Parse(new string('a', 40));
+        CommitSha headSha = CommitSha.Parse(new string('b', 40));
+
+        Run retry = Run.Queue(Guid.NewGuid(), "owner/repo", baseSha, headSha, 1, CreatedAt, 2);
+
+        Assert.Equal(2, retry.Attempt);
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            Run.Queue(Guid.NewGuid(), "owner/repo", baseSha, headSha, 1, CreatedAt, 0));
+    }
+
     private static Run CreateRun() => Run.Queue(
         Guid.NewGuid(),
         "owner/repo",

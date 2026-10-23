@@ -65,6 +65,56 @@ public sealed class LlmClientTests
     }
 
     [Fact]
+    public async Task Publishes_codex_messages_before_the_process_finishes()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        string directory = Directory.CreateTempSubdirectory("qa-agent-codex-live-test-").FullName;
+        string executable = Path.Combine(directory, "fake-codex");
+        string release = Path.Combine(directory, "release");
+        await File.WriteAllTextAsync(executable, $$$"""
+            #!/bin/sh
+            while [ "$#" -gt 0 ]; do
+              case "$1" in
+                --output-last-message) answer="$2"; shift 2 ;;
+                *) shift ;;
+              esac
+            done
+            cat >/dev/null
+            printf '%s\n' '{"type":"item.completed","item":{"id":"1","type":"agent_message","text":"Checking changed behavior"}}'
+            while [ ! -f '{{{release}}}' ]; do sleep 0.1; done
+            printf '%s' '{"ok":true}' > "$answer"
+            printf '%s\n' '{"type":"turn.completed","usage":{"input_tokens":2,"output_tokens":3}}'
+            """);
+        File.SetUnixFileMode(executable, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        FileCodexActivityStore store = new(Path.Combine(directory, "activity"));
+        Guid runId = Guid.NewGuid();
+        CodexExecLlmClient client = new(new CodexExecRunner(),
+            new CodexExecOptions { Executable = executable, TimeoutSeconds = 10 },
+            NullLogger<CodexExecLlmClient>.Instance, store);
+        Task<LlmResponse> pending = client.GenerateAsync(new LlmRequest("Check this", Schema)
+        { RunId = runId, Stage = "Plan" }, CancellationToken.None);
+        try
+        {
+            IReadOnlyList<CodexActivityEntry> entries = [];
+            using CancellationTokenSource wait = new(TimeSpan.FromSeconds(5));
+            while (!wait.IsCancellationRequested)
+            {
+                entries = await store.ReadAsync(runId, CancellationToken.None);
+                if (entries.Any(entry => entry.Kind == "message")) break;
+                await Task.Delay(50);
+            }
+            Assert.Contains(entries, entry => entry.Stage == "Plan" && entry.Text == "Checking changed behavior");
+            Assert.False(pending.IsCompleted);
+        }
+        finally
+        {
+            await File.WriteAllTextAsync(release, "go");
+            await pending;
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task Missing_cli_reports_actionable_failure()
     {
         CodexExecRunner runner = new();
@@ -128,6 +178,6 @@ public sealed class LlmClientTests
     private sealed class FakeRunner(CodexExecResult response) : ICodexExecRunner
     {
         public Task<CodexExecResult> RunAsync(string prompt, string jsonSchema, CodexExecOptions options,
-            CancellationToken cancellationToken) => Task.FromResult(response);
+            CancellationToken cancellationToken, Func<string, Task>? onEvent = null) => Task.FromResult(response);
     }
 }

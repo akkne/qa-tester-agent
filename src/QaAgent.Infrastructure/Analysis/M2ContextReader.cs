@@ -81,7 +81,18 @@ public sealed partial class M2ContextReader : IM2ContextReader
                 continue;
             }
 
-            foreach (string path in Directory.EnumerateFiles(testRoot, "*.cs", SearchOption.AllDirectories).Order(StringComparer.Ordinal))
+            HashSet<string> changedTests = snapshot.Files
+                .Where(file => file.Path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase) &&
+                    Under(file.Path, directory))
+                .Select(file => Resolve(root, file.Path))
+                .ToHashSet(StringComparer.Ordinal);
+            string[] paths = Directory.EnumerateFiles(testRoot, "*.cs", SearchOption.AllDirectories)
+                .OrderBy(path => !changedTests.Contains(path))
+                .ThenBy(path => changedTests.Any(changed =>
+                    Path.GetDirectoryName(changed) == Path.GetDirectoryName(path)) ? 0 : 1)
+                .ThenBy(path => path, StringComparer.Ordinal)
+                .ToArray();
+            foreach (string path in paths)
             {
                 if (testBudget == 0)
                 {
@@ -102,6 +113,14 @@ public sealed partial class M2ContextReader : IM2ContextReader
         {
             string content = await File.ReadAllTextAsync(path, cancellationToken);
             Append(text, root, path, content, Math.Min(content.Length, 4000));
+        }
+
+        // Product builds treat code-style warnings as errors, so generated tests must follow the same rules.
+        string editorConfig = Path.Combine(root, ".editorconfig");
+        if (File.Exists(editorConfig))
+        {
+            string content = await File.ReadAllTextAsync(editorConfig, cancellationToken);
+            Append(text, root, editorConfig, content, Math.Min(content.Length, 8000));
         }
 
         string[] changedIds = snapshot.Diff.Split('\n')

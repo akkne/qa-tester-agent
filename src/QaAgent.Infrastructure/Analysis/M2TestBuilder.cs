@@ -107,6 +107,9 @@ public sealed partial class M2TestBuilder : IM2TestBuilder
             start.ArgumentList.Add(project);
             start.ArgumentList.Add("--nologo");
             start.ArgumentList.Add("-v:q");
+            start.ArgumentList.Add("-warnaserror");
+            start.ArgumentList.Add("-m:1");
+            start.ArgumentList.Add("/p:UseSharedCompilation=false");
             using Process process = Process.Start(start)
                 ?? throw new InvalidOperationException("Unable to start dotnet build.");
             Task<string> stdout = process.StandardOutput.ReadToEndAsync(cancellationToken);

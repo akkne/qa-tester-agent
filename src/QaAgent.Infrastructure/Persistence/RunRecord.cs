@@ -7,6 +7,7 @@ public sealed class RunRecord
     public required string BaseSha { get; set; }
     public required string HeadSha { get; set; }
     public int ProfileVersion { get; set; }
+    public int Attempt { get; set; } = 1;
     public required string State { get; set; }
     public string? FinalStatus { get; set; }
     public DateTimeOffset CreatedAt { get; set; }

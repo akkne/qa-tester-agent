@@ -25,7 +25,8 @@ public sealed class M2OfflineFlowTests
                 [new ChangedFile("demo/Demo.Web/Program.cs", "M")],
                 await RunAsync(clone, "git", "diff", baseSha, head, "--", "demo/Demo.Web"));
             ProjectProfile profile = new("demo", 2, "demo/docs/specs", ["demo/Demo.Tests"], "revision");
-            M2Result result = await new M2Processor(new FakeLlm(), new M2ContextReader(), new M2TestBuilder(), new DiffSecretScanner())
+            M2Result result = await new M2Processor(new FakeLlm("CHANGE-" + head[..12].ToUpperInvariant()),
+                    new M2ContextReader(), new M2TestBuilder(), new DiffSecretScanner())
                 .ProcessAsync(snapshot, profile, CancellationToken.None);
 
             Assert.True(result.TestsCompile, result.BuildDiagnostics);
@@ -81,7 +82,7 @@ public sealed class M2OfflineFlowTests
         return text;
     }
 
-    private sealed class FakeLlm : ILlmClient
+    private sealed class FakeLlm(string traceId) : ILlmClient
     {
         private int call;
 
@@ -93,9 +94,9 @@ public sealed class M2OfflineFlowTests
                 {
                     scenarios = new[]
                     {
-                        new { requirementId = "DEMO-REG-01", kind = "positive", expected = "account created", steps = "register valid account" },
-                        new { requirementId = "DEMO-REG-02", kind = "negative", expected = "duplicate rejected", steps = "register twice" },
-                        new { requirementId = "DEMO-REG-05", kind = "access-control", expected = "anonymous denied", steps = "request private API" }
+                        new { requirementId = traceId, kind = "positive", expected = "account created", steps = "register valid account" },
+                        new { requirementId = traceId, kind = "negative", expected = "duplicate rejected", steps = "register twice" },
+                        new { requirementId = traceId, kind = "access-control", expected = "anonymous denied", steps = "request private API" }
                     },
                     contextGaps = Array.Empty<string>()
                 }),
@@ -104,11 +105,11 @@ public sealed class M2OfflineFlowTests
                 {
                     tests = new[]
                     {
-                        Test("Positive", "DEMO-REG-01", "positive", "Assert.Equal(System.Net.HttpStatusCode.Created, response.StatusCode);",
+                        Test("Positive", traceId, "positive", "Assert.Equal(System.Net.HttpStatusCode.Created, response.StatusCode);",
                             "await client.PostAsJsonAsync(\"/api/register\", new RegistrationInput(\"new@example.com\", \"secure-password-123\"))"),
-                        Test("Negative", "DEMO-REG-02", "negative", "Assert.Equal(System.Net.HttpStatusCode.BadRequest, response.StatusCode);",
+                        Test("Negative", traceId, "negative", "Assert.Equal(System.Net.HttpStatusCode.BadRequest, response.StatusCode);",
                             "await client.PostAsJsonAsync(\"/api/register\", new RegistrationInput(\"bad\", \"secure-password-123\"))"),
-                        Test("Access", "DEMO-REG-05", "access-control", "Assert.Equal(System.Net.HttpStatusCode.Unauthorized, response.StatusCode);",
+                        Test("Access", traceId, "access-control", "Assert.Equal(System.Net.HttpStatusCode.Unauthorized, response.StatusCode);",
                             "await client.GetAsync(\"/api/me\")")
                     }
                 }),

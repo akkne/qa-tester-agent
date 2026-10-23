@@ -48,8 +48,11 @@ public static class MarkdownReportRenderer
         text.AppendLine($"- **Tests:** {execution.TotalTests?.ToString() ?? "unavailable"} total; {execution.FailedTests?.ToString() ?? "unavailable"} failed");
         foreach ((string name, StageCheckResult check) in execution.Checks)
             text.AppendLine($"- **{Safe(name)}:** {(check.Passed ? "passed" : "failed")} (exit {check.ExitCode}); {Safe(check.Summary)}");
-        text.AppendLine($"- **Stand:** {(execution.StandAvailable ? "available" : "unavailable")}; {Safe(execution.StandFailure ?? "")}");
-        text.AppendLine($"- **Browser:** {execution.BrowserPassed?.ToString() ?? "not run"}; {Safe(execution.BrowserJson ?? "")}");
+        if (execution.Profile == M3ExecutionProfile.WebStand)
+        {
+            text.AppendLine($"- **Stand:** {(execution.StandAvailable ? "available" : "unavailable")}; {Safe(execution.StandFailure ?? "")}");
+            text.AppendLine($"- **Browser:** {execution.BrowserPassed?.ToString() ?? "not run"}; {Safe(execution.BrowserJson ?? "")}");
+        }
         if (execution.Coverage is { } coverage)
         {
             text.AppendLine($"- **Whole project line coverage:** {Metric(coverage.WholeProject)}");
@@ -63,7 +66,7 @@ public static class MarkdownReportRenderer
         if (analysis.ContextGaps.Count > 0)
         {
             text.AppendLine();
-            text.AppendLine("## Context gaps");
+            text.AppendLine("## Warnings and context gaps");
             text.AppendLine();
             foreach (string gap in analysis.ContextGaps) text.AppendLine($"- {Safe(gap)}");
         }

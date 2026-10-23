@@ -10,6 +10,7 @@ public sealed class RunFactory(IClock clock)
         string repositoryId,
         CommitSha baseSha,
         CommitSha headSha,
-        int profileVersion) =>
-        Run.Queue(id, repositoryId, baseSha, headSha, profileVersion, clock.UtcNow);
+        int profileVersion,
+        int attempt = 1) =>
+        Run.Queue(id, repositoryId, baseSha, headSha, profileVersion, clock.UtcNow, attempt);
 }

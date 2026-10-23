@@ -46,6 +46,12 @@ public sealed class GitCliWorkspace(GitWorkspaceOptions options) : IGitWorkspace
         }
     }
 
+    public async Task ResetAsync(GitSnapshot snapshot, CancellationToken cancellationToken)
+    {
+        await GitAsync(snapshot.WorkspacePath, ["checkout", "--force", "--detach", snapshot.HeadSha.Value], cancellationToken);
+        await GitAsync(snapshot.WorkspacePath, ["clean", "-fdxq"], cancellationToken);
+    }
+
     private static async Task<string> GitAsync(
         string? directory,
         IReadOnlyList<string> arguments,
@@ -87,11 +93,11 @@ public sealed class GitCliWorkspace(GitWorkspaceOptions options) : IGitWorkspace
         }
 
         string stdout = await output;
-        await error;
+        string stderr = (await error).Trim();
         if (process.ExitCode != 0)
         {
             throw new InvalidOperationException(
-                $"Git {arguments[0]} failed with exit code {process.ExitCode}.");
+                $"Git {arguments[0]} failed with exit code {process.ExitCode}: {stderr[..Math.Min(stderr.Length, 300)]}");
         }
 
         return stdout;

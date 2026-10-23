@@ -64,6 +64,34 @@ public sealed class M2ContextAndGuardTests
         }
     }
 
+    [Fact]
+    public async Task ContextIncludesChangedTestBeforeLargeUnchangedTestFiles()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "qa-m2-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(root, "demo/docs/specs"));
+            Directory.CreateDirectory(Path.Combine(root, "demo/Demo.Tests/Admin"));
+            Directory.CreateDirectory(Path.Combine(root, "demo/Demo.Tests/Host"));
+            await File.WriteAllTextAsync(Path.Combine(root, "demo/docs/specs/feature.md"),
+                "| DEMO-REG-01 | Create account |\n");
+            await File.WriteAllTextAsync(Path.Combine(root, "demo/Demo.Tests/Admin/Unchanged.cs"),
+                new string('x', 40_000));
+            await File.WriteAllTextAsync(Path.Combine(root, "demo/Demo.Tests/Host/CompositionTests.cs"),
+                "class CompositionTests { /* changed-test-marker */ }");
+
+            M2Context context = await new M2ContextReader().ReadAsync(
+                Snapshot(root, [new ChangedFile("demo/Demo.Tests/Host/CompositionTests.cs", "M")], "diff"),
+                Profile(), CancellationToken.None);
+
+            Assert.Contains("changed-test-marker", context.Text);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     [Theory]
     [InlineData("../Outside.cs", "[Fact] void T() { Assert.True(false); }")]
     [InlineData("demo/Demo.Web/Bad.cs", "[Fact] void T() { Assert.True(false); }")]

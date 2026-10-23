@@ -7,7 +7,8 @@ namespace QaAgent.Infrastructure.Llm;
 public sealed class CodexExecLlmClient(
     ICodexExecRunner runner,
     CodexExecOptions options,
-    ILogger<CodexExecLlmClient> logger) : ILlmClient
+    ILogger<CodexExecLlmClient> logger,
+    ICodexActivityStore? activityStore = null) : ILlmClient
 {
     public async Task<LlmResponse> GenerateAsync(LlmRequest request, CancellationToken cancellationToken)
     {
@@ -19,7 +20,45 @@ public sealed class CodexExecLlmClient(
             throw new ArgumentException("The JSON schema must be an object.", nameof(request));
         }
 
-        CodexExecResult result = await runner.RunAsync(request.Prompt, request.JsonSchema, options, cancellationToken);
+        async Task RecordAsync(string kind, string text)
+        {
+            if (request.RunId is not { } runId || activityStore is null) return;
+            try
+            {
+                await activityStore.AppendAsync(runId, request.Stage, kind, text, cancellationToken);
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+            {
+                logger.LogWarning(error, "Could not save Codex activity for run {RunId}", runId);
+            }
+        }
+
+        await RecordAsync("status", "Codex started.");
+        CodexExecResult result;
+        try
+        {
+            result = await runner.RunAsync(request.Prompt, request.JsonSchema, options, cancellationToken,
+                async line =>
+                {
+                    using JsonDocument document = JsonDocument.Parse(line);
+                    JsonElement root = document.RootElement;
+                    if (!root.TryGetProperty("type", out JsonElement type) ||
+                        type.GetString() != "item.completed" ||
+                        !root.TryGetProperty("item", out JsonElement item) ||
+                        !item.TryGetProperty("type", out JsonElement itemType) ||
+                        itemType.GetString() != "agent_message" ||
+                        !item.TryGetProperty("text", out JsonElement message) ||
+                        message.ValueKind != JsonValueKind.String) return;
+                    string? text = message.GetString();
+                    if (!string.IsNullOrWhiteSpace(text)) await RecordAsync("message", text);
+                });
+        }
+        catch (Exception error) when (error is not OperationCanceledException)
+        {
+            await RecordAsync("status", "Codex stopped: " + error.Message);
+            throw;
+        }
+        await RecordAsync("status", $"Codex finished. Tokens: {result.InputTokens} in, {result.OutputTokens} out.");
         if (string.IsNullOrWhiteSpace(result.Json) || result.Json.Length > 256_000)
         {
             throw new InvalidDataException("Codex returned empty or oversized JSON.");

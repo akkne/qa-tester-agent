@@ -18,4 +18,7 @@ public interface IGitWorkspace
         CommitSha baseSha,
         CommitSha headSha,
         CancellationToken cancellationToken);
+
+    /// <summary>Drops every untracked or modified file so the workspace matches headSha again.</summary>
+    Task ResetAsync(GitSnapshot snapshot, CancellationToken cancellationToken);
 }

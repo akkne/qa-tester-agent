@@ -20,10 +20,12 @@ public sealed class EfRunRepository(RunDbContext dbContext) : IRunRepository
         int profileVersion,
         CancellationToken cancellationToken)
     {
-        RunRecord? record = await dbContext.Runs.AsNoTracking().SingleOrDefaultAsync(
-            run => run.RepositoryId == repositoryId && run.BaseSha == baseSha.Value &&
-                run.HeadSha == headSha.Value && run.ProfileVersion == profileVersion,
-            cancellationToken);
+        // A push may have several attempts after a blocked run; the latest one answers the push.
+        RunRecord? record = await dbContext.Runs.AsNoTracking()
+            .Where(run => run.RepositoryId == repositoryId && run.BaseSha == baseSha.Value &&
+                run.HeadSha == headSha.Value && run.ProfileVersion == profileVersion)
+            .OrderByDescending(run => run.Attempt)
+            .FirstOrDefaultAsync(cancellationToken);
         return record is null ? null : Restore(record);
     }
 
@@ -81,6 +83,7 @@ public sealed class EfRunRepository(RunDbContext dbContext) : IRunRepository
         BaseSha = run.BaseSha.Value,
         HeadSha = run.HeadSha.Value,
         ProfileVersion = run.ProfileVersion,
+        Attempt = run.Attempt,
         State = run.State.ToString(),
         FinalStatus = run.FinalStatus?.ToString(),
         CreatedAt = run.CreatedAt,
@@ -99,5 +102,6 @@ public sealed class EfRunRepository(RunDbContext dbContext) : IRunRepository
         record.StartedAt,
         record.FinishedAt,
         Enum.TryParse(record.FinalStatus, out RunStatus status) ? status : null,
-        record.FailureReason);
+        record.FailureReason,
+        record.Attempt);
 }

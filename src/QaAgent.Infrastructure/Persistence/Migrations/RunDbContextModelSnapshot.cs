@@ -28,6 +28,11 @@ namespace QaAgent.Infrastructure.Persistence.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
+                    b.Property<int>("Attempt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(1);
+
                     b.Property<string>("BaseSha")
                         .IsRequired()
                         .HasMaxLength(40)
@@ -86,7 +91,7 @@ namespace QaAgent.Infrastructure.Persistence.Migrations
 
                     b.HasIndex("State", "CreatedAt");
 
-                    b.HasIndex("RepositoryId", "BaseSha", "HeadSha", "ProfileVersion")
+                    b.HasIndex("RepositoryId", "BaseSha", "HeadSha", "ProfileVersion", "Attempt")
                         .IsUnique();
 
                     b.ToTable("runs", (string)null);

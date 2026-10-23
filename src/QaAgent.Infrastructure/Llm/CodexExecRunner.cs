@@ -8,13 +8,13 @@ public sealed record CodexExecResult(string Json, int InputTokens, int OutputTok
 public interface ICodexExecRunner
 {
     Task<CodexExecResult> RunAsync(string prompt, string jsonSchema, CodexExecOptions options,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken, Func<string, Task>? onEvent = null);
 }
 
 public sealed class CodexExecRunner : ICodexExecRunner
 {
     public async Task<CodexExecResult> RunAsync(string prompt, string jsonSchema, CodexExecOptions options,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, Func<string, Task>? onEvent = null)
     {
         string runDirectory = Directory.CreateTempSubdirectory("qa-agent-codex-").FullName;
         string schemaPath = Path.Combine(runDirectory, "schema.json");
@@ -74,25 +74,29 @@ public sealed class CodexExecRunner : ICodexExecRunner
             timeout.CancelAfter(TimeSpan.FromSeconds(options.TimeoutSeconds));
             try
             {
-                Task<string> stdout = process.StandardOutput.ReadToEndAsync(timeout.Token);
+                Task<(int Input, int Output)?> stdout = ReadEventsAsync(process.StandardOutput, onEvent, timeout.Token);
                 Task<string> stderr = process.StandardError.ReadToEndAsync(timeout.Token);
                 await process.StandardInput.WriteAsync(prompt.AsMemory(), timeout.Token);
                 process.StandardInput.Close();
                 await process.WaitForExitAsync(timeout.Token);
-                string events = await stdout;
+                (int Input, int Output)? usage = await stdout;
                 string errors = await stderr;
                 if (process.ExitCode != 0)
                 {
                     throw new InvalidOperationException(DescribeFailure(errors, process.ExitCode));
                 }
 
-                (int input, int output) = ParseUsage(events);
+                if (usage is not { } completed)
+                {
+                    throw new InvalidDataException("Codex did not report completed token usage.");
+                }
+
                 if (!File.Exists(answerPath))
                 {
                     throw new InvalidDataException("Codex completed without a final response file.");
                 }
 
-                return new CodexExecResult(await File.ReadAllTextAsync(answerPath, timeout.Token), input, output);
+                return new CodexExecResult(await File.ReadAllTextAsync(answerPath, timeout.Token), completed.Input, completed.Output);
             }
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
             {
@@ -113,23 +117,27 @@ public sealed class CodexExecRunner : ICodexExecRunner
         }
     }
 
-    private static (int Input, int Output) ParseUsage(string jsonl)
+    private static async Task<(int Input, int Output)?> ReadEventsAsync(
+        StreamReader stream, Func<string, Task>? onEvent, CancellationToken cancellationToken)
     {
-        foreach (string line in jsonl.Split('\n', StringSplitOptions.RemoveEmptyEntries).Reverse())
+        (int Input, int Output)? completed = null;
+        while (await stream.ReadLineAsync(cancellationToken) is { } line)
         {
+            if (line.Length == 0) continue;
             using JsonDocument document = JsonDocument.Parse(line);
             JsonElement root = document.RootElement;
+            if (onEvent is not null) await onEvent(line);
             if (root.TryGetProperty("type", out JsonElement type) && type.GetString() == "turn.completed" &&
                 root.TryGetProperty("usage", out JsonElement usage) &&
                 usage.TryGetProperty("input_tokens", out JsonElement input) && input.TryGetInt32(out int inputTokens) &&
                 usage.TryGetProperty("output_tokens", out JsonElement output) && output.TryGetInt32(out int outputTokens) &&
                 inputTokens >= 0 && outputTokens >= 0)
             {
-                return (inputTokens, outputTokens);
+                completed = (inputTokens, outputTokens);
             }
         }
 
-        throw new InvalidDataException("Codex did not report completed token usage.");
+        return completed;
     }
 
     private static string DescribeFailure(string stderr, int exitCode)

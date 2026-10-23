@@ -7,6 +7,7 @@ public sealed class Run
     public CommitSha BaseSha { get; }
     public CommitSha HeadSha { get; }
     public int ProfileVersion { get; }
+    public int Attempt { get; }
     public RunState State { get; private set; }
     public RunStatus? FinalStatus { get; private set; }
     public DateTimeOffset CreatedAt { get; }
@@ -20,6 +21,7 @@ public sealed class Run
         CommitSha baseSha,
         CommitSha headSha,
         int profileVersion,
+        int attempt,
         DateTimeOffset createdAt)
     {
         Id = id;
@@ -27,6 +29,7 @@ public sealed class Run
         BaseSha = baseSha;
         HeadSha = headSha;
         ProfileVersion = profileVersion;
+        Attempt = attempt;
         CreatedAt = createdAt;
         State = RunState.Queued;
     }
@@ -37,7 +40,8 @@ public sealed class Run
         CommitSha baseSha,
         CommitSha headSha,
         int profileVersion,
-        DateTimeOffset createdAt)
+        DateTimeOffset createdAt,
+        int attempt = 1)
     {
         if (id == Guid.Empty)
         {
@@ -62,7 +66,12 @@ public sealed class Run
             throw new ArgumentOutOfRangeException(nameof(profileVersion));
         }
 
-        return new Run(id, repositoryId, baseSha, headSha, profileVersion, createdAt);
+        if (attempt <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(attempt));
+        }
+
+        return new Run(id, repositoryId, baseSha, headSha, profileVersion, attempt, createdAt);
     }
 
     public void Start(DateTimeOffset now)
@@ -119,9 +128,10 @@ public sealed class Run
         DateTimeOffset? startedAt,
         DateTimeOffset? finishedAt,
         RunStatus? finalStatus,
-        string? failureReason)
+        string? failureReason,
+        int attempt = 1)
     {
-        Run run = Queue(id, repositoryId, baseSha, headSha, profileVersion, createdAt);
+        Run run = Queue(id, repositoryId, baseSha, headSha, profileVersion, createdAt, attempt);
         if (startedAt is not null)
         {
             run.Start(startedAt.Value);

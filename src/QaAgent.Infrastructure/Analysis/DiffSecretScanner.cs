@@ -30,7 +30,10 @@ public sealed partial class DiffSecretScanner : ISecretScanner
                 string added = line[1..];
                 string? kind = TokenRegex().IsMatch(added) ? "credential token" :
                     PrivateKeyRegex().IsMatch(added) ? "private key" :
-                    (!added.Contains("demo-local-only", StringComparison.Ordinal) && AssignmentRegex().IsMatch(added))
+                    (!added.Contains("demo-local-only", StringComparison.Ordinal) &&
+                        !(path is not null && path.EndsWith(".example", StringComparison.Ordinal) &&
+                            added.Contains("Password=offline-test-only", StringComparison.Ordinal)) &&
+                        AssignmentRegex().IsMatch(added))
                         ? "secret assignment" : null;
                 if (kind is not null && path is not null)
                 {

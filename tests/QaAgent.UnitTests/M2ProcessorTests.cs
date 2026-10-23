@@ -54,6 +54,44 @@ public sealed class M2ProcessorTests
         Assert.Equal(3, llm.Calls);
     }
 
+    [Fact]
+    public async Task TechnicalChangeCanUseChangedExistingTestsWithoutGeneratingMore()
+    {
+        const string plan = """
+            {"scenarios":[{"requirementId":"CHANGE-BBBBBBBBBBBB","kind":"positive","expected":"feature enabled","steps":"run existing composition test"}],"contextGaps":[]}
+            """;
+        FakeLlm llm = new(plan, """{"findings":[]}""", """{"tests":[]}""");
+        FakeBuilder builder = new();
+        GitSnapshot snapshot = Snapshot() with
+        {
+            Files = [new ChangedFile("demo/Demo.Tests/Host/CompositionTests.cs", "M")]
+        };
+
+        M2Result result = await new M2Processor(llm, new TechnicalContext(), builder, new FakeScanner())
+            .ProcessAsync(snapshot, Profile(), CancellationToken.None);
+
+        Assert.True(result.TestsCompile);
+        Assert.Empty(result.Tests);
+        Assert.Equal(["CHANGE-BBBBBBBBBBBB"], result.RequirementIds);
+        Assert.Equal(3, llm.Calls);
+        Assert.Equal(0, builder.Calls);
+    }
+
+    [Fact]
+    public async Task TechnicalChangeWithoutExistingOrGeneratedTestsIsRejected()
+    {
+        const string plan = """
+            {"scenarios":[{"requirementId":"CHANGE-BBBBBBBBBBBB","kind":"positive","expected":"feature enabled","steps":"check startup"}],"contextGaps":[]}
+            """;
+        FakeLlm llm = new(plan, """{"findings":[]}""", """{"tests":[]}""");
+
+        InvalidOperationException error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            new M2Processor(llm, new TechnicalContext(), new FakeBuilder(), new FakeScanner())
+                .ProcessAsync(Snapshot(), Profile(), CancellationToken.None));
+
+        Assert.Contains("No tests were generated", error.Message);
+    }
+
     private static GitSnapshot Snapshot() => new("/tmp/snapshot", CommitSha.Parse(new string('a', 40)),
         CommitSha.Parse(new string('b', 40)), [new ChangedFile("demo/Demo.Web/Program.cs", "M")], "diff");
 
@@ -63,6 +101,12 @@ public sealed class M2ProcessorTests
     {
         public Task<M2Context> ReadAsync(GitSnapshot snapshot, ProjectProfile profile, CancellationToken cancellationToken) =>
             Task.FromResult(new M2Context("requirement and diff", ["DEMO-01"], ["DEMO-01"], []));
+    }
+
+    private sealed class TechnicalContext : IM2ContextReader
+    {
+        public Task<M2Context> ReadAsync(GitSnapshot snapshot, ProjectProfile profile, CancellationToken cancellationToken) =>
+            Task.FromResult(new M2Context("technical diff and changed composition test", ["UNRELATED-01"], [], []));
     }
 
     private sealed class FakeScanner : ISecretScanner
@@ -82,6 +126,7 @@ public sealed class M2ProcessorTests
     private sealed class FakeBuilder(params bool[] results) : IM2TestBuilder
     {
         private int count;
+        public int Calls => count;
 
         public Task<TestBuildResult> BuildAsync(GitSnapshot snapshot, ProjectProfile profile,
             IReadOnlyList<GeneratedTest> tests, CancellationToken cancellationToken) =>

@@ -7,6 +7,7 @@ using QaAgent.Application.Abstractions;
 using QaAgent.Application.Analysis;
 using QaAgent.Application.Execution;
 using QaAgent.Domain;
+using QaAgent.Infrastructure.Llm;
 using QaAgent.Infrastructure.Persistence;
 
 namespace QaAgent.Host.Api;
@@ -16,7 +17,8 @@ public sealed record CreateRunRequest(
     string? Branch,
     string? BaseSha,
     string? HeadSha,
-    string? ProfileId);
+    string? ProfileId,
+    bool Rerun = false);
 
 public static class RunEndpoints
 {
@@ -24,7 +26,9 @@ public static class RunEndpoints
     {
         endpoints.MapPost("/api/runs", CreateRunAsync);
         endpoints.MapGet("/api/runs/{id:guid}", GetRunAsync);
+        endpoints.MapGet("/api/runs/{id:guid}/report", GetReportAsync);
         endpoints.MapGet("/runs/{id:guid}", GetRunPageAsync);
+        endpoints.MapGet("/runs/{id:guid}/activity", GetActivityAsync);
         endpoints.MapGet("/runs/{id:guid}/artifacts/{artifactId}", GetArtifactAsync);
         return endpoints;
     }
@@ -93,12 +97,16 @@ public static class RunEndpoints
 
         Run? existing = await unitOfWork.Runs.FindByPushAsync(
             allowedRepository, baseSha, headSha, profileVersion, cancellationToken);
-        if (existing is not null)
+        // A blocked run says nothing about the code, so the next push or a manual rerun gets a fresh attempt.
+        if (existing is not null &&
+            !(existing.State == RunState.Completed &&
+                (existing.FinalStatus == RunStatus.Blocked || request.Rerun)))
         {
             return Accepted(existing, true);
         }
 
-        Run run = factory.Create(Guid.NewGuid(), allowedRepository, baseSha, headSha, profileVersion);
+        Run run = factory.Create(Guid.NewGuid(), allowedRepository, baseSha, headSha, profileVersion,
+            (existing?.Attempt ?? 0) + 1);
         await unitOfWork.Runs.AddAsync(run, cancellationToken);
         try
         {
@@ -160,6 +168,7 @@ public static class RunEndpoints
             BaseSha = run.BaseSha.Value,
             HeadSha = run.HeadSha.Value,
             run.ProfileVersion,
+            run.Attempt,
             State = run.State.ToString(),
             FinalStatus = run.FinalStatus?.ToString(),
             run.FailureReason,
@@ -186,6 +195,33 @@ public static class RunEndpoints
         });
     }
 
+    private static async Task<IResult> GetReportAsync(
+        Guid id,
+        HttpContext context,
+        IConfiguration configuration,
+        RunDbContext dbContext,
+        CancellationToken cancellationToken)
+    {
+        if (!Authorized(context, configuration))
+        {
+            return Results.Unauthorized();
+        }
+
+        string? json = await dbContext.Runs.AsNoTracking().Where(run => run.Id == id)
+            .Select(run => run.M4ResultJson).SingleOrDefaultAsync(cancellationToken);
+        PublishedReport? publication = json is null ? null : JsonSerializer.Deserialize<PublishedReport>(json);
+        if (publication is null)
+        {
+            return Results.NotFound();
+        }
+
+        string configuredRoot = Path.GetFullPath(configuration["Agent:ArtifactRoot"] ?? "artifacts");
+        string file = Path.GetFullPath(Path.Combine(configuredRoot, id.ToString("N"), "report.md"));
+        return File.Exists(file)
+            ? Results.Text(await File.ReadAllTextAsync(file, cancellationToken), "text/markdown; charset=utf-8")
+            : Results.NotFound();
+    }
+
     private static async Task<IResult> GetRunPageAsync(Guid id, HttpContext context,
         IConfiguration configuration, RunDbContext db, CancellationToken cancellationToken)
     {
@@ -196,10 +232,11 @@ public static class RunEndpoints
         M3Result? execution = record.M3ResultJson is null ? null : JsonSerializer.Deserialize<M3Result>(record.M3ResultJson);
         PublishedReport? publication = record.M4ResultJson is null ? null : JsonSerializer.Deserialize<PublishedReport>(record.M4ResultJson);
         static string Escape(string? value) => System.Net.WebUtility.HtmlEncode(value ?? "");
-        StringBuilder html = new("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>QA result</title><style>body{font:16px system-ui,sans-serif;max-width:880px;margin:3rem auto;padding:0 1rem;color:#1b2633}h1{font-size:1.8rem}section{border-top:1px solid #ccd3db;padding:1rem 0}code{overflow-wrap:anywhere}li{margin:.4rem 0}.status{font-weight:700}a{color:#0759a5}</style></head><body>");
-        html.Append("<h1>QA result</h1><p class=\"status\">Status: ").Append(Escape(record.FinalStatus ?? record.State))
-            .Append("</p><p>Run <code>").Append(id).Append("</code></p><p>Range <code>")
+        StringBuilder html = new("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>QA result</title><style>body{font:16px system-ui,sans-serif;max-width:880px;margin:3rem auto;padding:0 1rem;color:#1b2633}h1{font-size:1.8rem}section{border-top:1px solid #ccd3db;padding:1rem 0}code{overflow-wrap:anywhere}li{margin:.4rem 0}.status{font-weight:700}a{color:#0759a5}.activity{list-style:none;padding:0}.activity li{border:1px solid #ccd3db;border-radius:8px;padding:.7rem;margin:.6rem 0}.activity small{color:#526579}.activity pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:28rem;overflow:auto;margin:.5rem 0 0;font:13px ui-monospace,monospace}</style></head><body>");
+        html.Append("<h1>QA result</h1><p class=\"status\" id=\"run-status\">Status: ").Append(Escape(record.FinalStatus ?? record.State))
+            .Append("</p><p>Run <code>").Append(id).Append("</code> (attempt ").Append(record.Attempt).Append(")</p><p>Range <code>")
             .Append(Escape(record.BaseSha)).Append(".. ").Append(Escape(record.HeadSha)).Append("</code></p>");
+        html.Append("<section><h2>Live agent activity</h2><p id=\"activity-state\">Loading activity…</p><ol class=\"activity\" id=\"activity-list\"></ol></section>");
         if (record.FailureReason is not null) html.Append("<p>Reason: ").Append(Escape(record.FailureReason)).Append("</p>");
         if (record.StartedAt is { } started && record.FinishedAt is { } finished)
             html.Append("<p>Duration: ").Append((finished - started).TotalSeconds.ToString("F1", System.Globalization.CultureInfo.InvariantCulture)).Append(" seconds</p>");
@@ -215,7 +252,14 @@ public static class RunEndpoints
             foreach (AnalysisFinding finding in analysis.Findings) html.Append("<li>").Append(Escape(finding.Status))
                 .Append(": ").Append(Escape(finding.Path)).Append(':').Append(finding.Line).Append(" — ")
                 .Append(Escape(finding.Observed)).Append("</li>");
-            html.Append("</ul></section>");
+            html.Append("</ul>");
+            if (analysis.ContextGaps.Count > 0)
+            {
+                html.Append("<h3>Warnings and context gaps</h3><ul>");
+                foreach (string gap in analysis.ContextGaps) html.Append("<li>").Append(Escape(gap)).Append("</li>");
+                html.Append("</ul>");
+            }
+            html.Append("</section>");
         }
         if (execution is not null)
         {
@@ -240,8 +284,26 @@ public static class RunEndpoints
                     .Append("\">").Append(Escape(artifact.Name)).Append("</a></li>");
             html.Append("</ul></section>");
         }
-        html.Append("</body></html>");
+        html.Append("<script>const initialState=").Append(JsonSerializer.Serialize(record.State)).Append(";let next=0;async function updateActivity(){try{const response=await fetch(location.pathname+'/activity?after='+next,{cache:'no-store'});if(!response.ok)throw new Error('HTTP '+response.status);const data=await response.json();const list=document.getElementById('activity-list');for(const entry of data.entries){const row=document.createElement('li');const label=document.createElement('small');label.textContent=new Date(entry.at).toLocaleTimeString()+' · '+entry.stage+' · '+entry.kind;const body=document.createElement('pre');body.textContent=entry.text;row.append(label,body);list.append(row)}next=data.next;document.getElementById('activity-state').textContent=data.state==='Completed'?'Run finished.':'Updates every 3 seconds.';document.getElementById('run-status').textContent='Status: '+(data.finalStatus||data.state);if(initialState!=='Completed'&&data.state==='Completed'){location.reload();return}}catch(error){document.getElementById('activity-state').textContent='Activity temporarily unavailable: '+error.message}setTimeout(updateActivity,3000)}updateActivity()</script></body></html>");
         return Results.Content(html.ToString(), "text/html; charset=utf-8");
+    }
+
+    private static async Task<IResult> GetActivityAsync(Guid id, int? after, HttpContext context,
+        IConfiguration configuration, RunDbContext db, ICodexActivityStore activity, CancellationToken cancellationToken)
+    {
+        if (!BrowserAuthorized(context, configuration)) return Challenge(context);
+        var run = await db.Runs.AsNoTracking().Where(record => record.Id == id)
+            .Select(record => new { record.State, record.FinalStatus }).SingleOrDefaultAsync(cancellationToken);
+        if (run is null) return Results.NotFound();
+        IReadOnlyList<CodexActivityEntry> entries = await activity.ReadAsync(id, cancellationToken);
+        context.Response.Headers.CacheControl = "no-store";
+        return Results.Ok(new
+        {
+            run.State,
+            run.FinalStatus,
+            Next = entries.Count,
+            Entries = entries.Skip(Math.Clamp(after ?? 0, 0, entries.Count))
+        });
     }
 
     private static async Task<IResult> GetArtifactAsync(Guid id, string artifactId, HttpContext context,
@@ -302,7 +364,7 @@ public static class RunEndpoints
 
     private static IResult Accepted(Run run, bool duplicate) => Results.Accepted(
         $"/api/runs/{run.Id}",
-        new { RunId = run.Id, State = run.State.ToString(), ResultUrl = $"/api/runs/{run.Id}", PageUrl = $"/runs/{run.Id}", Duplicate = duplicate });
+        new { RunId = run.Id, run.Attempt, State = run.State.ToString(), ResultUrl = $"/api/runs/{run.Id}", PageUrl = $"/runs/{run.Id}", Duplicate = duplicate });
 
     private static bool Authorized(HttpContext context, IConfiguration configuration)
     {

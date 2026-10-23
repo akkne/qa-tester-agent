@@ -32,4 +32,27 @@ public sealed class M4ReportTests
         Assert.Contains("&lt;script&gt;", report);
         Assert.DoesNotContain("<script>", report);
     }
+
+    [Fact]
+    public void Bot_report_shows_smoke_evidence_without_web_stand_fields()
+    {
+        string baseSha = new('a', 40);
+        string headSha = new('b', 40);
+        Run run = Run.Queue(Guid.NewGuid(), "owner/repo", CommitSha.Parse(baseSha),
+            CommitSha.Parse(headSha), 11, DateTimeOffset.UtcNow);
+        GitSnapshot snapshot = new("/tmp/workspace", CommitSha.Parse(baseSha), CommitSha.Parse(headSha), [], "");
+        M2Result analysis = new([], [], [], [], [], 0, 0, 0, true, null, []);
+        M3Result execution = new(headSha, "/tmp/artifacts",
+            new Dictionary<string, StageCheckResult>
+            {
+                ["host-smoke"] = new(true, 0, "/tmp/artifacts/host-smoke.log", "Host /health returned HTTP 200.")
+            }, 5, 0, null, false, null, null, null, M3ExecutionProfile.LeadQualification);
+
+        string report = MarkdownReportRenderer.Render(run, snapshot, analysis, execution, RunStatus.Passed,
+            [], "http://127.0.0.1:5080");
+
+        Assert.Contains("host-smoke:** passed", report);
+        Assert.DoesNotContain("**Stand:**", report);
+        Assert.DoesNotContain("**Browser:**", report);
+    }
 }
