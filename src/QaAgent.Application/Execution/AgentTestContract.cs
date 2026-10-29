@@ -90,7 +90,9 @@ public static class AgentTestContract
             2. Toolchains. The image has git, bash, curl, jq, build-essential, mise, and Node.js, Python, Java, Go and .NET.
                Install the versions the repository pins (.nvmrc, .node-version, .python-version, .tool-versions,
                global.json, go.mod toolchain, rust-toolchain.toml, engines, CI matrix) with `mise use -g <tool>@<version>`
-               or the ecosystem's installer, as a setup command.
+               or the ecosystem's installer, as a setup command. Install toolchains, caches and scratch files outside
+               {{ArtifactsMount}} (e.g. /opt, /tmp, $HOME): {{ArtifactsMount}} holds evidence only, and the service deletes
+               everything else there.
             3. Dependencies. Use lockfile-respecting installs: npm ci, pnpm install --frozen-lockfile, yarn install --immutable,
                uv sync --frozen, poetry install, pip install -r into a venv, go mod download, cargo fetch --locked,
                mvn -B -q dependency:go-offline, gradle --no-daemon, dotnet restore, bundle install, composer install.
