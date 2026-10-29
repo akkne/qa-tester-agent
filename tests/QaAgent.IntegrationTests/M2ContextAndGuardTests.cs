@@ -112,6 +112,88 @@ public sealed class M2ContextAndGuardTests
         }
     }
 
+    [Fact]
+    public async Task SecretScannerIgnoresNoNewlineMarkerForLineNumbers()
+    {
+        string diff = "diff --git a/app.cs b/app.cs\n+++ b/app.cs\n@@ -1,2 +1,3 @@\n-old\n\\ No newline at end of file\n+new\n+apiKey=abcdefghijklmnop\n";
+        IReadOnlyList<SecretFinding> findings = await new DiffSecretScanner().ScanAsync(
+            Snapshot("/tmp/workspace", [new ChangedFile("app.cs", "M")], diff), CancellationToken.None);
+
+        Assert.Equal(2, Assert.Single(findings).Line);
+    }
+
+    [Fact]
+    public async Task ChangedRequirementIdsComeOnlyFromSpecificationFilesAndKnownIds()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "qa-m2-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(root, "demo/docs/specs"));
+            await File.WriteAllTextAsync(Path.Combine(root, "demo/docs/specs/feature.md"),
+                "| DEMO-REG-01 | Create account |\n");
+            string diff = "diff --git a/demo/docs/specs/feature.md b/demo/docs/specs/feature.md\n+++ b/demo/docs/specs/feature.md\n" +
+                "@@ -0,0 +1,2 @@\n+| DEMO-REG-01 | Create account |\n+| OTHER-99 | Unknown |\n" +
+                "diff --git a/docs/other.md b/docs/other.md\n+++ b/docs/other.md\n@@ -0,0 +1,1 @@\n+| DEMO-REG-02 | Elsewhere |\n";
+
+            M2Context context = await new M2ContextReader().ReadAsync(
+                Snapshot(root, [new ChangedFile("demo/docs/specs/feature.md", "M")], diff), Profile(), CancellationToken.None);
+
+            Assert.Equal(["DEMO-REG-01"], context.ChangedRequirementIds);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task SymlinkedSourceFileIsNotReadIntoContext()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "qa-m2-" + Guid.NewGuid().ToString("N"));
+        string outside = Path.Combine(Path.GetTempPath(), "qa-m2-out-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(root, "demo/docs/specs"));
+            Directory.CreateDirectory(Path.Combine(root, "demo/Demo.Web"));
+            Directory.CreateDirectory(outside);
+            await File.WriteAllTextAsync(Path.Combine(root, "demo/docs/specs/feature.md"), "| DEMO-REG-01 | x |\n");
+            await File.WriteAllTextAsync(Path.Combine(outside, "Secret.cs"), "class S { /* outside-marker */ }");
+            File.CreateSymbolicLink(Path.Combine(root, "demo/Demo.Web/Link.cs"), Path.Combine(outside, "Secret.cs"));
+
+            await Assert.ThrowsAsync<InvalidOperationException>(() => new M2ContextReader().ReadAsync(
+                Snapshot(root, [new ChangedFile("demo/Demo.Web/Link.cs", "A")], "diff"), Profile(), CancellationToken.None));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+            Directory.Delete(outside, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task GeneratedTestUnderSymlinkedDirectoryIsRejected()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "qa-m2-" + Guid.NewGuid().ToString("N"));
+        string outside = Path.Combine(Path.GetTempPath(), "qa-m2-out-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(Path.Combine(root, "demo/Demo.Tests"));
+            Directory.CreateDirectory(outside);
+            Directory.CreateSymbolicLink(Path.Combine(root, "demo/Demo.Tests/Generated"), outside);
+            GeneratedTest test = new("demo/Demo.Tests/Generated/Evil.cs", ["DEMO-REG-01"], "positive",
+                "[Fact] void T() { Assert.True(false); }");
+
+            await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                new M2TestBuilder().BuildAsync(Snapshot(root, [], ""), Profile(), [test], CancellationToken.None));
+            Assert.Empty(Directory.GetFiles(outside));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+            Directory.Delete(outside, recursive: true);
+        }
+    }
+
     private static ProjectProfile Profile() =>
         new("demo", 2, "demo/docs/specs", ["demo/Demo.Tests"], "revision");
 

@@ -167,15 +167,15 @@ public sealed partial class CoberturaCoverageCalculator : ICoverageCalculator
                 oldPath = null;
                 inHunk = false;
             }
-            else if (line.StartsWith("--- a/", StringComparison.Ordinal))
+            else if (!inHunk && line.StartsWith("--- a/", StringComparison.Ordinal))
             {
                 oldPath = NormalizePath(line[6..]);
             }
-            else if (line.StartsWith("+++ b/", StringComparison.Ordinal))
+            else if (!inHunk && line.StartsWith("+++ b/", StringComparison.Ordinal))
             {
                 path = NormalizePath(line[6..]);
             }
-            else if (line.StartsWith("+++ /dev/null", StringComparison.Ordinal))
+            else if (!inHunk && line.StartsWith("+++ /dev/null", StringComparison.Ordinal))
             {
                 path = null;
             }
@@ -184,7 +184,7 @@ public sealed partial class CoberturaCoverageCalculator : ICoverageCalculator
                 newLine = int.Parse(hunk.Groups[1].Value, CultureInfo.InvariantCulture);
                 inHunk = true;
             }
-            else if (inHunk && line.StartsWith('+') && !line.StartsWith("+++", StringComparison.Ordinal))
+            else if (inHunk && line.StartsWith('+'))
             {
                 if (path is not null && IsProductionSource(path))
                 {
@@ -193,11 +193,11 @@ public sealed partial class CoberturaCoverageCalculator : ICoverageCalculator
 
                 newLine++;
             }
-            else if (inHunk && line.StartsWith('-') && !line.StartsWith("---", StringComparison.Ordinal))
+            else if (inHunk && line.StartsWith('-'))
             {
                 if (oldPath is not null && IsProductionSource(oldPath))
                 {
-                    string content = line[1..].Trim();
+                    string content = $"{oldPath}\0{line[1..].Trim()}";
                     removed[content] = removed.GetValueOrDefault(content) + 1;
                 }
             }
@@ -210,7 +210,7 @@ public sealed partial class CoberturaCoverageCalculator : ICoverageCalculator
         // An unchanged line moved within the diff is not a newly changed line.
         return added.Where(line =>
         {
-            string content = line.Text.Trim();
+            string content = $"{line.Path}\0{line.Text.Trim()}";
             if (removed.GetValueOrDefault(content) == 0)
             {
                 return true;
@@ -261,6 +261,7 @@ public sealed partial class CoberturaCoverageCalculator : ICoverageCalculator
     {
         string trimmed = text.Trim();
         return trimmed.Length == 0 || trimmed is "{" or "}" or "};" or "*/" ||
+            KeywordOnlyPattern().IsMatch(trimmed) ||
             trimmed.StartsWith("//", StringComparison.Ordinal) ||
             trimmed.StartsWith("/*", StringComparison.Ordinal) ||
             trimmed.StartsWith('*') ||
@@ -282,6 +283,10 @@ public sealed partial class CoberturaCoverageCalculator : ICoverageCalculator
         new(new CoverageMetric(0, 0, reason), new CoverageMetric(0, 0, reason));
 
     private sealed record AddedLine(string Path, int Number, string Text);
+
+    // Bare keywords, case/default labels and generic constraints produce no sequence points.
+    [GeneratedRegex(@"^(?:(?:else|try|finally|do)\s*\{?|(?:case\s+.+|default):|where\s+\w+\s*:.+)$")]
+    private static partial Regex KeywordOnlyPattern();
 
     [GeneratedRegex(@"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@")]
     private static partial Regex HunkPattern();

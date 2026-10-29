@@ -35,7 +35,7 @@ public sealed partial class M2TestBuilder : IM2TestBuilder
             }
 
             string path = Path.GetFullPath(Path.Combine(root, normalized));
-            if (!path.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.Ordinal) ||
+            if (!path.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.Ordinal) || WorkspacePath.HasLink(root, path) ||
                 (File.Exists(path) && !generatedPaths.Contains(path)) || !next.TryAdd(path, test.Source))
             {
                 throw new InvalidOperationException($"Generated test would overwrite an existing or duplicate file: {test.Path}.");
@@ -103,6 +103,12 @@ public sealed partial class M2TestBuilder : IM2TestBuilder
                 RedirectStandardError = true,
                 UseShellExecute = false
             };
+            // The pushed repo is untrusted: its build must not inherit the agent's secrets.
+            foreach (string name in start.Environment.Keys.Where(IsSecretName).ToArray())
+            {
+                start.Environment.Remove(name);
+            }
+
             start.ArgumentList.Add("build");
             start.ArgumentList.Add(project);
             start.ArgumentList.Add("--nologo");
@@ -140,6 +146,24 @@ public sealed partial class M2TestBuilder : IM2TestBuilder
             : new TestBuildResult(false, string.Join("\n", diagnostics));
     }
 
+    public void Cleanup()
+    {
+        foreach (string path in generatedPaths)
+        {
+            File.Delete(path);
+        }
+
+        generatedPaths.Clear();
+    }
+
+    private static bool IsSecretName(string name) =>
+        SecretEnvironmentRegex().IsMatch(name) ||
+        name.StartsWith("GitHub__", StringComparison.OrdinalIgnoreCase) ||
+        name.StartsWith("AgentApi__", StringComparison.OrdinalIgnoreCase) ||
+        name.StartsWith("TestAgent__", StringComparison.OrdinalIgnoreCase) ||
+        name.StartsWith("Llm__", StringComparison.OrdinalIgnoreCase) ||
+        name.StartsWith("CODEX_", StringComparison.OrdinalIgnoreCase);
+
     private static string Normalize(string text) => WhiteSpaceRegex().Replace(text, string.Empty);
 
     [GeneratedRegex(@"\bSkip\s*=|\[Skip\b|\bAssert\.True\s*\(\s*true\s*\)", RegexOptions.IgnoreCase)]
@@ -153,6 +177,9 @@ public sealed partial class M2TestBuilder : IM2TestBuilder
 
     [GeneratedRegex(@"\bAssert\.\w+\s*\([^;]*;", RegexOptions.Singleline)]
     private static partial Regex AssertionRegex();
+
+    [GeneratedRegex("TOKEN|KEY|SECRET|PASSWORD|CREDENTIAL", RegexOptions.IgnoreCase)]
+    private static partial Regex SecretEnvironmentRegex();
 
     [GeneratedRegex(@"\s+")]
     private static partial Regex WhiteSpaceRegex();

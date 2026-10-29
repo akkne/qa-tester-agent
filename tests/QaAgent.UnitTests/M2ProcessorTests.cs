@@ -92,6 +92,27 @@ public sealed class M2ProcessorTests
         Assert.Contains("No tests were generated", error.Message);
     }
 
+    [Fact]
+    public async Task EmptyRepairRemovesPreviouslyWrittenGeneratedTests()
+    {
+        const string plan = """
+            {"scenarios":[{"requirementId":"CHANGE-BBBBBBBBBBBB","kind":"positive","expected":"feature enabled","steps":"check startup"}],"contextGaps":[]}
+            """;
+        const string tests = """
+            {"tests":[{"path":"demo/Demo.Tests/Generated/Positive.cs","requirementIds":["CHANGE-BBBBBBBBBBBB"],"kind":"positive","source":"[Fact] public void Positive() { Assert.True(1 == 1); }"}]}
+            """;
+        FakeLlm llm = new(plan, """{"findings":[]}""", tests, """{"tests":[]}""");
+        FakeBuilder builder = new(false);
+        GitSnapshot snapshot = new("/tmp/snapshot", CommitSha.Parse(new string('a', 40)), CommitSha.Parse(new string('b', 40)),
+            [new ChangedFile("demo/Demo.Tests/Existing.cs", "M")], "diff");
+
+        M2Result result = await new M2Processor(llm, new TechnicalContext(), builder, new FakeScanner())
+            .ProcessAsync(snapshot, Profile(), CancellationToken.None);
+
+        Assert.Empty(result.Tests);
+        Assert.Equal(1, builder.Cleanups);
+    }
+
     private static GitSnapshot Snapshot() => new("/tmp/snapshot", CommitSha.Parse(new string('a', 40)),
         CommitSha.Parse(new string('b', 40)), [new ChangedFile("demo/Demo.Web/Program.cs", "M")], "diff");
 
@@ -127,6 +148,9 @@ public sealed class M2ProcessorTests
     {
         private int count;
         public int Calls => count;
+        public int Cleanups { get; private set; }
+
+        public void Cleanup() => Cleanups++;
 
         public Task<TestBuildResult> BuildAsync(GitSnapshot snapshot, ProjectProfile profile,
             IReadOnlyList<GeneratedTest> tests, CancellationToken cancellationToken) =>

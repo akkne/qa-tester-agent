@@ -42,7 +42,7 @@ public sealed partial class DiffSecretScanner : ISecretScanner
 
                 lineNumber++;
             }
-            else if (!line.StartsWith('-'))
+            else if (!line.StartsWith('-') && !line.StartsWith('\\'))
             {
                 lineNumber++;
             }

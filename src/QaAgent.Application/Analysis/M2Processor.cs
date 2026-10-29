@@ -87,6 +87,11 @@ public sealed class M2Processor(ILlmClient llm, IM2ContextReader contextReader, 
             inputTokens += response.InputTokens;
             outputTokens += response.OutputTokens;
             tests = ParseTests(response.Json, knownIds);
+            if (tests.Count == 0)
+            {
+                testBuilder.Cleanup();
+            }
+
             if (tests.Count == 0 && !specificationChanged && snapshot.Files.Any(file =>
                     file.Path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase) &&
                     profile.AllowedTestDirectories.Any(directory => Under(file.Path, directory))))

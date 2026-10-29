@@ -250,6 +250,106 @@ public sealed class CoberturaCoverageCalculatorTests
         Assert.Contains("missing", result.WholeProject.Reason);
     }
 
+    [Fact]
+    public async Task AddedLineStartingWithPlusPlusDoesNotShiftLaterLineNumbers()
+    {
+        string workspace = NewWorkspace();
+        try
+        {
+            string report = await WriteReportAsync(workspace, """
+                <coverage><packages><package><classes>
+                  <class filename="src/Product/Thing.cs"><lines>
+                    <line number="1" hits="1" /><line number="2" hits="0" />
+                  </lines></class>
+                </classes></package></packages></coverage>
+                """);
+            GitSnapshot snapshot = Snapshot(workspace, "diff --git a/src/Product/Thing.cs b/src/Product/Thing.cs\n" +
+                "--- a/src/Product/Thing.cs\n+++ b/src/Product/Thing.cs\n@@ -0,0 +1,2 @@\n+++count;\n+Run();\n");
+
+            var result = await new CoberturaCoverageCalculator().CalculateAsync(snapshot, [report], CancellationToken.None);
+
+            Assert.Equal(2, result.ChangedLines.ExecutableLines);
+            Assert.Equal(1, result.ChangedLines.CoveredLines);
+        }
+        finally
+        {
+            Directory.Delete(workspace, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task ControlFlowKeywordLinesWithoutSequencePointsAreIgnored()
+    {
+        string workspace = NewWorkspace();
+        try
+        {
+            string report = await WriteReportAsync(workspace, """
+                <coverage><packages><package><classes>
+                  <class filename="src/Product/Thing.cs"><lines>
+                    <line number="3" hits="1" /><line number="7" hits="1" />
+                  </lines></class>
+                </classes></package></packages></coverage>
+                """);
+            GitSnapshot snapshot = Snapshot(workspace, """
+                diff --git a/src/Product/Thing.cs b/src/Product/Thing.cs
+                --- a/src/Product/Thing.cs
+                +++ b/src/Product/Thing.cs
+                @@ -0,0 +1,7 @@
+                +try
+                +{
+                +    Run();
+                +}
+                +finally
+                +{
+                +    Stop();
+                """);
+            var result = await new CoberturaCoverageCalculator().CalculateAsync(snapshot, [report], CancellationToken.None);
+
+            Assert.Equal(2, result.ChangedLines.ExecutableLines);
+            Assert.Equal(2, result.ChangedLines.CoveredLines);
+        }
+        finally
+        {
+            Directory.Delete(workspace, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task MovedLineFilterIsKeyedByFile()
+    {
+        string workspace = NewWorkspace();
+        try
+        {
+            string report = await WriteReportAsync(workspace, """
+                <coverage><packages><package><classes>
+                  <class filename="src/Product/A.cs"><lines><line number="1" hits="1" /></lines></class>
+                  <class filename="src/Product/B.cs"><lines><line number="1" hits="0" /></lines></class>
+                </classes></package></packages></coverage>
+                """);
+            GitSnapshot snapshot = Snapshot(workspace, """
+                diff --git a/src/Product/A.cs b/src/Product/A.cs
+                --- a/src/Product/A.cs
+                +++ b/src/Product/A.cs
+                @@ -1,1 +0,0 @@
+                -Run();
+                diff --git a/src/Product/B.cs b/src/Product/B.cs
+                --- a/src/Product/B.cs
+                +++ b/src/Product/B.cs
+                @@ -0,0 +1,1 @@
+                +Run();
+                """);
+
+            var result = await new CoberturaCoverageCalculator().CalculateAsync(snapshot, [report], CancellationToken.None);
+
+            Assert.Equal(1, result.ChangedLines.ExecutableLines);
+            Assert.Equal(0, result.ChangedLines.CoveredLines);
+        }
+        finally
+        {
+            Directory.Delete(workspace, recursive: true);
+        }
+    }
+
     private static string NewWorkspace()
     {
         string path = Path.Combine(Path.GetTempPath(), "qa-coverage-" + Guid.NewGuid().ToString("N"));

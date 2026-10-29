@@ -20,7 +20,8 @@ public sealed partial class M2ContextReader : IM2ContextReader
         StringBuilder text = new();
         List<string> ids = [];
         List<string> gaps = [];
-        foreach (string spec in Directory.EnumerateFiles(specRoot, "*.md", SearchOption.AllDirectories).Order(StringComparer.Ordinal))
+        foreach (string spec in Directory.EnumerateFiles(specRoot, "*.md", SearchOption.AllDirectories)
+            .Where(path => !WorkspacePath.HasLink(root, path)).Order(StringComparer.Ordinal))
         {
             string content = await File.ReadAllTextAsync(spec, cancellationToken);
             foreach (Match match in RequirementIdRegex().Matches(content))
@@ -87,6 +88,7 @@ public sealed partial class M2ContextReader : IM2ContextReader
                 .Select(file => Resolve(root, file.Path))
                 .ToHashSet(StringComparer.Ordinal);
             string[] paths = Directory.EnumerateFiles(testRoot, "*.cs", SearchOption.AllDirectories)
+                .Where(path => !WorkspacePath.HasLink(root, path))
                 .OrderBy(path => !changedTests.Contains(path))
                 .ThenBy(path => changedTests.Any(changed =>
                     Path.GetDirectoryName(changed) == Path.GetDirectoryName(path)) ? 0 : 1)
@@ -108,6 +110,7 @@ public sealed partial class M2ContextReader : IM2ContextReader
         }
 
         foreach (string path in Directory.EnumerateFiles(root, "*.csproj", SearchOption.AllDirectories)
+            .Where(path => !WorkspacePath.HasLink(root, path))
             .Where(path => !path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
             .Order(StringComparer.Ordinal).Take(20))
         {
@@ -123,13 +126,37 @@ public sealed partial class M2ContextReader : IM2ContextReader
             Append(text, root, editorConfig, content, Math.Min(content.Length, 8000));
         }
 
-        string[] changedIds = snapshot.Diff.Split('\n')
-            .Where(line => line.StartsWith('+') && !line.StartsWith("+++", StringComparison.Ordinal))
-            .Select(line => RequirementIdRegex().Match(line[1..]))
-            .Where(match => match.Success)
-            .Select(match => match.Groups[1].Value)
-            .Distinct(StringComparer.Ordinal).ToArray();
-        return new M2Context(text.ToString(), ids.Distinct(StringComparer.Ordinal).ToArray(), changedIds, gaps);
+        HashSet<string> knownIds = ids.ToHashSet(StringComparer.Ordinal);
+        string specPrefix = profile.SpecificationDirectory.Replace('\\', '/').TrimEnd('/') + "/";
+        List<string> changedIds = [];
+        bool inSpec = false;
+        bool inHunk = false;
+        foreach (string line in snapshot.Diff.Split('\n'))
+        {
+            if (line.StartsWith("diff --git ", StringComparison.Ordinal))
+            {
+                inSpec = false;
+                inHunk = false;
+            }
+            else if (!inHunk && line.StartsWith("+++ ", StringComparison.Ordinal))
+            {
+                inSpec = line.StartsWith("+++ b/", StringComparison.Ordinal) &&
+                    line[6..].TrimEnd('\r').StartsWith(specPrefix, StringComparison.Ordinal);
+            }
+            else if (line.StartsWith("@@", StringComparison.Ordinal))
+            {
+                inHunk = true;
+            }
+            else if (inHunk && inSpec && line.StartsWith('+') &&
+                RequirementIdRegex().Match(line[1..]) is { Success: true } match &&
+                knownIds.Contains(match.Groups[1].Value))
+            {
+                changedIds.Add(match.Groups[1].Value);
+            }
+        }
+
+        return new M2Context(text.ToString(), ids.Distinct(StringComparer.Ordinal).ToArray(),
+            changedIds.Distinct(StringComparer.Ordinal).ToArray(), gaps);
     }
 
     private static void Append(StringBuilder text, string root, string path, string content, int maxLength)
@@ -146,7 +173,7 @@ public sealed partial class M2ContextReader : IM2ContextReader
         }
 
         string path = Path.GetFullPath(Path.Combine(root, relative));
-        if (!path.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+        if (!path.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.Ordinal) || WorkspacePath.HasLink(root, path))
         {
             throw new InvalidOperationException("Repository path escapes the workspace.");
         }

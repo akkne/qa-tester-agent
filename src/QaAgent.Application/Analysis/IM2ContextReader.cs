@@ -19,4 +19,6 @@ public interface IM2TestBuilder
         ProjectProfile profile,
         IReadOnlyList<GeneratedTest> tests,
         CancellationToken cancellationToken);
+
+    void Cleanup();
 }
