@@ -7,6 +7,7 @@ using QaAgent.Host.Worker;
 using QaAgent.Infrastructure.Analysis;
 using QaAgent.Infrastructure.Execution;
 using QaAgent.Infrastructure.Git;
+using QaAgent.Infrastructure.Llm;
 using QaAgent.Infrastructure.Persistence;
 using QaAgent.Infrastructure.Publishing;
 using QaAgent.Infrastructure.Time;
@@ -44,11 +45,17 @@ public static class ServiceCollectionExtensions
         });
         services.AddSingleton<IGitWorkspace, GitCliWorkspace>();
         services.AddScoped<ICoverageCalculator, CoberturaCoverageCalculator>();
-        services.AddScoped<IM3Executor>(provider =>
-            configuration["Profiles:demo:ExecutionMode"] == "lead-qualification"
-                ? new LeadQualificationM3Executor(configuration["Agent:ArtifactRoot"] ?? "artifacts")
-                : new DockerM3Executor(configuration["Agent:ArtifactRoot"] ?? "artifacts",
-                    provider.GetRequiredService<ICoverageCalculator>()));
+        services.AddScoped<IM3Executor>(provider => configuration["Profiles:demo:ExecutionMode"] switch
+        {
+            "lead-qualification" => new LeadQualificationM3Executor(configuration["Agent:ArtifactRoot"] ?? "artifacts"),
+            "agent" => new AgentM3Executor(configuration["Agent:ArtifactRoot"] ?? "artifacts",
+                TestAgentOptions(configuration),
+                provider.GetRequiredService<ICoverageCalculator>(),
+                provider.GetRequiredService<ICodexActivityStore>(),
+                provider.GetRequiredService<ILogger<AgentM3Executor>>()),
+            _ => new DockerM3Executor(configuration["Agent:ArtifactRoot"] ?? "artifacts",
+                provider.GetRequiredService<ICoverageCalculator>())
+        });
         services.AddScoped<IReportPublisher>(_ => new GitReportPublisher(
             configuration["Agent:ArtifactRoot"] ?? "artifacts",
             string.IsNullOrWhiteSpace(configuration["GitHub:PublishRemote"])
@@ -65,5 +72,27 @@ public static class ServiceCollectionExtensions
         services.AddScoped<M2Processor>();
         services.AddHostedService<RunWorker>();
         return services;
+    }
+
+    private static AgentExecutionOptions TestAgentOptions(IConfiguration configuration)
+    {
+        IConfigurationSection section = configuration.GetSection("TestAgent");
+        AgentExecutionOptions defaults = new();
+        AgentExecutionOptions options = new()
+        {
+            Image = section["Image"] ?? defaults.Image,
+            CodexHome = section["CodexHome"] ?? Environment.GetEnvironmentVariable("CODEX_HOME") ?? defaults.CodexHome,
+            ApiKey = section["ApiKey"],
+            Model = section["Model"] ?? configuration["Llm:Model"],
+            TimeoutMinutes = section.GetValue("TimeoutMinutes", defaults.TimeoutMinutes),
+            CommandTimeoutSeconds = section.GetValue("CommandTimeoutSeconds", defaults.CommandTimeoutSeconds),
+            Cpus = section["Cpus"] ?? defaults.Cpus,
+            Memory = section["Memory"] ?? defaults.Memory,
+            AllowDocker = section.GetValue("AllowDocker", false),
+            Hints = configuration.GetSection("Profiles:demo:TestHints").Get<string[]>() ?? []
+        };
+        if (string.IsNullOrWhiteSpace(options.Image) || options.TimeoutMinutes <= 0 || options.CommandTimeoutSeconds <= 0)
+            throw new InvalidOperationException("TestAgent:Image, TimeoutMinutes and CommandTimeoutSeconds must be valid.");
+        return options;
     }
 }

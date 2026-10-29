@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+# Runs one setup, build or test command for the QA test agent and records its exit code in the ledger.
+# Usage: qa-run --suite <id> --phase <setup|build|test> [--cwd <dir>] -- <command> [args...]
+set -uo pipefail
+
+suite="" phase="" cwd="${PWD}"
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --suite) suite="${2:-}"; shift 2 ;;
+    --phase) phase="${2:-}"; shift 2 ;;
+    --cwd) cwd="${2:-}"; shift 2 ;;
+    --) shift; break ;;
+    *) echo "qa-run: unknown option $1" >&2; exit 2 ;;
+  esac
+done
+
+if ! [[ "$suite" =~ ^[a-z0-9][a-z0-9._-]{0,63}$ ]] || [[ "$suite" == *..* ]]; then
+  echo "qa-run: --suite must match [a-z0-9][a-z0-9._-]{0,63}" >&2; exit 2
+fi
+case "$phase" in setup|build|test) ;; *) echo "qa-run: --phase must be setup, build or test" >&2; exit 2 ;; esac
+if [ "$#" -eq 0 ]; then echo "qa-run: missing command after --" >&2; exit 2; fi
+if [ ! -d "$cwd" ]; then echo "qa-run: --cwd $cwd does not exist" >&2; exit 2; fi
+
+root="${QA_ARTIFACTS:-/artifacts}"
+mkdir -p "$root/commands"
+exec 9>"$root/.ledger.lock"
+flock 9
+seq=$(( $(cat "$root/.sequence" 2>/dev/null || echo 0) + 1 ))
+printf '%s' "$seq" > "$root/.sequence"
+flock -u 9
+
+log="commands/$(printf '%04d' "$seq")-$suite-$phase.log"
+command_text=$(printf '%q ' "$@")
+started=$(date +%s%3N)
+(cd "$cwd" && timeout --kill-after=30 "${QA_COMMAND_TIMEOUT:-1800}" "$@") 2>&1 | tee "$root/$log"
+code=${PIPESTATUS[0]}
+finished=$(date +%s%3N)
+
+flock 9
+jq -cn --argjson seq "$seq" --arg suite "$suite" --arg phase "$phase" --arg cwd "$cwd" \
+  --arg command "${command_text% }" --argjson exitCode "$code" --argjson durationMs "$((finished - started))" \
+  --arg log "$log" '{seq:$seq,suite:$suite,phase:$phase,cwd:$cwd,command:$command,exitCode:$exitCode,durationMs:$durationMs,log:$log}' \
+  >> "$root/ledger.jsonl"
+flock -u 9
+exit "$code"

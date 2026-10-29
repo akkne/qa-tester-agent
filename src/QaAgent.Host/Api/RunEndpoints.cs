@@ -267,7 +267,28 @@ public static class RunEndpoints
                 .Append(" total, ").Append(execution.FailedTests?.ToString() ?? "unavailable").Append(" failed</p><ul>");
             foreach ((string name, StageCheckResult check) in execution.Checks)
                 html.Append("<li>").Append(Escape(name)).Append(": ").Append(check.Passed ? "passed" : "failed").Append("</li>");
-            html.Append("</ul><p>Browser: ").Append(execution.BrowserPassed?.ToString() ?? "not run").Append("</p>");
+            html.Append("</ul>");
+            if (execution.Agent is { } agent)
+            {
+                html.Append("<h3>Test suites</h3>");
+                if (agent.BlockReason is not null) html.Append("<p>").Append(Escape(agent.BlockReason)).Append("</p>");
+                html.Append("<ul>");
+                foreach (SuiteResult suite in agent.Suites)
+                    html.Append("<li>").Append(Escape(suite.Id)).Append(" (").Append(Escape(suite.Language)).Append('/')
+                        .Append(Escape(suite.Framework)).Append("): ").Append(suite.Verdict).Append(", ")
+                        .Append(suite.Total?.ToString() ?? "?").Append(" total, ").Append(suite.Failed?.ToString() ?? "?")
+                        .Append(" failed").Append(suite.CountsVerified ? "" : " (agent-reported)")
+                        .Append(suite.Reason is null ? "" : "; " + Escape(suite.Reason)).Append("</li>");
+                foreach (AgentSkippedSuite skipped in agent.NotRun)
+                    html.Append("<li>Not run: ").Append(Escape(skipped.Path)).Append(" — ").Append(Escape(skipped.Reason)).Append("</li>");
+                foreach (string warning in agent.Warnings)
+                    html.Append("<li>Warning: ").Append(Escape(warning)).Append("</li>");
+                html.Append("</ul>");
+            }
+            else
+            {
+                html.Append("<p>Browser: ").Append(execution.BrowserPassed?.ToString() ?? "not run").Append("</p>");
+            }
             if (execution.Coverage is { } coverage)
                 html.Append("<p>Changed line coverage: ").Append(coverage.ChangedLines.Percent?.ToString() ?? "unavailable").Append("%</p>");
             html.Append("</section>");

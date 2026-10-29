@@ -114,7 +114,7 @@ public sealed class GitReportPublisher(
         if (!Directory.Exists(directory)) return [];
         List<PublishedArtifact> artifacts = [];
         IEnumerable<string> files = Directory.EnumerateFiles(directory, "*", SearchOption.TopDirectoryOnly);
-        foreach (string subdirectory in new[] { "browser", "test-results" })
+        foreach (string subdirectory in new[] { "browser", "test-results", "agent" })
         {
             string path = Path.Combine(directory, subdirectory);
             if (Directory.Exists(path))
@@ -135,7 +135,8 @@ public sealed class GitReportPublisher(
                      relative.EndsWith(".json", StringComparison.OrdinalIgnoreCase))) &&
                 !(relative.StartsWith("test-results/", StringComparison.Ordinal) &&
                     (relative.EndsWith(".trx", StringComparison.OrdinalIgnoreCase) ||
-                     relative.EndsWith("coverage.cobertura.xml", StringComparison.OrdinalIgnoreCase))))
+                     relative.EndsWith("coverage.cobertura.xml", StringComparison.OrdinalIgnoreCase))) &&
+                !IsAgentEvidence(relative))
                 continue;
             byte[] hash = SHA256.HashData(Encoding.UTF8.GetBytes(relative));
             artifacts.Add(new PublishedArtifact(Convert.ToHexString(hash)[..24].ToLowerInvariant(),
@@ -143,6 +144,16 @@ public sealed class GitReportPublisher(
         }
         return artifacts.OrderBy(item => item.RelativePath, StringComparer.Ordinal).ToArray();
     }
+
+    // The agent's container also writes caches under agent/; only its logs, reports and ledger are evidence.
+    private static bool IsAgentEvidence(string relative) =>
+        relative is "agent/ledger.jsonl" or "agent/agent-report.json" or "agent/container.log" ||
+        (relative.StartsWith("agent/commands/", StringComparison.Ordinal) &&
+            relative.EndsWith(".log", StringComparison.OrdinalIgnoreCase)) ||
+        ((relative.StartsWith("agent/reports/", StringComparison.Ordinal) ||
+            relative.StartsWith("agent/coverage/", StringComparison.Ordinal)) &&
+            (relative.EndsWith(".xml", StringComparison.OrdinalIgnoreCase) ||
+             relative.EndsWith(".trx", StringComparison.OrdinalIgnoreCase)));
 
     private static string? GitHubWebBase(string remote)
     {

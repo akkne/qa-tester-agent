@@ -53,6 +53,25 @@ public static class MarkdownReportRenderer
             text.AppendLine($"- **Stand:** {(execution.StandAvailable ? "available" : "unavailable")}; {Safe(execution.StandFailure ?? "")}");
             text.AppendLine($"- **Browser:** {execution.BrowserPassed?.ToString() ?? "not run"}; {Safe(execution.BrowserJson ?? "")}");
         }
+        if (execution.Agent is { } agent)
+        {
+            text.AppendLine($"- **Test agent:** {agent.Suites.Count} suites; {agent.InputTokens} input, {agent.OutputTokens} output tokens");
+            if (agent.BlockReason is not null) text.AppendLine($"- **Test agent blocked:** {Safe(agent.BlockReason)}");
+            foreach (SuiteResult suite in agent.Suites)
+            {
+                string counts = suite.Total is { } total
+                    ? $"{total} total, {suite.Failed} failed, {suite.Skipped} skipped{(suite.CountsVerified ? "" : " (agent-reported)")}"
+                    : "no counts";
+                text.AppendLine($"- **Suite `{Safe(suite.Id)}`** ({Safe(suite.Language)}/{Safe(suite.Framework)}, `{Safe(suite.WorkingDirectory)}`): " +
+                    $"{suite.Verdict}; {counts}{(suite.Reason is null ? "" : "; " + Safe(suite.Reason))}");
+                foreach (string test in suite.FailedTests.Take(20)) text.AppendLine($"  - failed: `{Safe(test)}`");
+                if (suite.FailureSummary.Length > 0) text.AppendLine($"  - agent summary: {Safe(suite.FailureSummary)}");
+                if (suite.Notes.Length > 0) text.AppendLine($"  - agent notes: {Safe(suite.Notes)}");
+            }
+            foreach (AgentSkippedSuite skipped in agent.NotRun)
+                text.AppendLine($"- **Not run:** `{Safe(skipped.Path)}` — {Safe(skipped.Reason)}");
+            foreach (string warning in agent.Warnings) text.AppendLine($"- **Agent warning:** {Safe(warning)}");
+        }
         if (execution.Coverage is { } coverage)
         {
             text.AppendLine($"- **Whole project line coverage:** {Metric(coverage.WholeProject)}");

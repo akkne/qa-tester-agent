@@ -5,7 +5,7 @@ namespace QaAgent.Application.Execution;
 
 public sealed record StageCheckResult(bool Passed, int ExitCode, string LogPath, string Summary);
 
-public enum M3ExecutionProfile { WebStand, LeadQualification }
+public enum M3ExecutionProfile { WebStand, LeadQualification, Agent }
 
 public sealed record M3Result(
     string SourceSha,
@@ -18,7 +18,8 @@ public sealed record M3Result(
     string? StandFailure,
     bool? BrowserPassed,
     string? BrowserJson,
-    M3ExecutionProfile Profile = M3ExecutionProfile.WebStand)
+    M3ExecutionProfile Profile = M3ExecutionProfile.WebStand,
+    AgentExecution? Agent = null)
 {
     public bool TestsPassed => Checks.TryGetValue("test", out StageCheckResult? result) && result.Passed;
     public bool BuildPassed => Checks.TryGetValue("build", out StageCheckResult? result) && result.Passed;

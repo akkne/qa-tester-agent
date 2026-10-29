@@ -10,6 +10,9 @@ public sealed record M3Outcome(RunStatus Status, string? Reason)
 
     public static M3Outcome From(M3Result result)
     {
+        if (result.Profile == M3ExecutionProfile.Agent)
+            return FromAgent(result.Agent);
+
         if (result.Profile == M3ExecutionProfile.LeadQualification)
         {
             if (LeadQualificationChecks.Any(name => !result.Checks.TryGetValue(name, out StageCheckResult? check) ||
@@ -56,5 +59,23 @@ public sealed record M3Outcome(RunStatus Status, string? Reason)
         return result.AllChecksPassed && result.BrowserPassed.Value && browserStatus == "PASSED"
             ? new M3Outcome(RunStatus.Passed, null)
             : new M3Outcome(RunStatus.Failed, null);
+    }
+
+    private static M3Outcome FromAgent(AgentExecution? agent)
+    {
+        if (agent is null)
+            return new M3Outcome(RunStatus.Blocked, "M3 test agent results were unavailable.");
+        if (agent.BlockReason is not null)
+            return new M3Outcome(RunStatus.Blocked, agent.BlockReason);
+        if (agent.Suites.Any(suite => suite.Verdict == SuiteVerdict.Failed))
+            return new M3Outcome(RunStatus.Failed, null);
+        SuiteResult[] blocked = agent.Suites.Where(suite => suite.Verdict == SuiteVerdict.Blocked).ToArray();
+        if (blocked.Length > 0)
+            return new M3Outcome(RunStatus.Blocked, "M3 suites could not run: " +
+                string.Join("; ", blocked.Select(suite => $"{suite.Id}: {suite.Reason}")));
+        // A suite the agent skipped or could not prove is not a pass; a person decides whether it matters.
+        return agent.NotRun.Count > 0 || agent.Suites.Any(suite => suite.Verdict != SuiteVerdict.Passed)
+            ? new M3Outcome(RunStatus.NeedsReview, null)
+            : new M3Outcome(RunStatus.Passed, null);
     }
 }
