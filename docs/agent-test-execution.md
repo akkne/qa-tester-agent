@@ -84,6 +84,40 @@ Prompt построен как инструкция исполнителю, а �
 
 `TestAgent__ApiKey` (в `.env`) переключает агента на `CODEX_API_KEY`; без него в контейнер копируется `$CODEX_HOME/auth.json` (по умолчанию `~/.codex/auth.json`), а обновлённый токен после запуска возвращается на хост. `TestAgent__Model` по умолчанию равен `Llm__Model`. Образ собирается один раз: `docker build -t qa-agent/test-runner:1 docker/test-agent`. `TimeoutMinutes` должен помещаться в `Agent:RunTimeoutMinutes` с учётом M2 и повторных прогонов worker.
 
+## Написание тестов любого стека
+
+Тесты для всех стеков, включая C#, пишет только Codex-агент, независимо от `ExecutionMode`. План и анализ по-прежнему делает `ILlmClient` (JSON), а затем `M2Processor` вызывает `IM2TestWriter` — `AgentTestWriter`. Он запускает Codex в образе `qa-agent/test-runner`, том же, что у агентного M3. Отдельной C#-генерации и хостового `dotnet build` больше нет: образ и вход Codex (`TestAgent:*`) нужны для любого профиля.
+
+```text
+M2Processor ── план, анализ (codex exec на хосте)
+     │
+     └─► AgentTestWriter ── docker run qa-agent/test-runner (/src rw, /src/.git ro, /qa/task.md = спека+diff+план+находки)
+             │   codex exec --output-schema AgentTestWritingContract.Schema
+             │     пишет новые файлы в AllowedTestDirectories на языке и фреймворке репозитория
+             │     qa-run --suite S --phase setup|build|test  (build обязателен: компиляция / type-check / collect)
+             ▼
+         проверки сервиса → GeneratedTest[] (untracked-файлы в рабочем каталоге) → M3 агент запускает их вместе с остальными
+```
+
+| Компонент | Файл | Роль |
+| --- | --- | --- |
+| Контракт и prompt | `src/QaAgent.Application/Analysis/AgentTestWritingContract.cs` | Схема ответа (`files[]: path, kind, requirementIds, suite`), prompt |
+| Интерфейс | `src/QaAgent.Application/Analysis/IM2ContextReader.cs` | `IM2TestWriter`, `TestWritingRequest`, `TestWritingResult` |
+| Писатель | `src/QaAgent.Infrastructure/Analysis/AgentTestWriter.cs` | Контейнер, проверки, сбор файлов |
+| Контейнер Codex | `src/QaAgent.Infrastructure/Execution/CodexContainer.cs` | Общий запуск агента для M2 и M3 |
+
+Сервис не верит JSON агента и сам проверяет:
+
+- `HEAD` равен `headSha`, а `git diff --name-only <headSha>` пуст; иначе отбрасываются все тесты.
+- Каждый файл новый (не отслеживается git), лежит внутри `AllowedTestDirectories` (`.` разрешает весь репозиторий — для Go и Rust, где тесты лежат рядом с кодом), без симлинков, текстовый, не больше 60 000 символов.
+- В файле нет skip/xfail/`.only`/`@Disabled`/`#[ignore]`/`t.Skip` и аналогов; у тестового файла есть утверждение и хотя бы один известный ID требования. Вспомогательные файлы (`kind: "support"`) проверяются только на skip.
+- Для каждого `suite`, к которому относятся файлы, последняя запись `qa-run --phase build` в ledger завершилась с кодом 0. Иначе `TestsCompile = false`, и `RunWorker` исключает сгенерированные тесты. Агент собирает так же строго, как CI репозитория (`-warnaserror`, `.editorconfig`, линтеры), и сам чинит ошибки своих тестов; число упавших и затем исправленных сборок попадает в `GenerationFixes`.
+- После проверки рабочий каталог сбрасывается (`checkout --force` + `clean -fdxq`) и в него записываются только принятые файлы: артефакты сборки и необъявленные файлы агента не доходят до M3 и QA-ветки.
+
+Если агент ничего не написал или все файлы отброшены, план и находки остаются в отчёте, а запуск продолжается с тестами репозитория. Список новых untracked-файлов агентный M3 передаёт агенту запуска отдельным разделом prompt, потому что `git ls-files` их не показывает; `DockerM3Executor` и `LeadQualificationM3Executor` подхватывают их обычной сборкой проекта. Доказательства лежат в `artifacts/<run>/authoring/` (`ledger.jsonl`, `commands/*.log`, `agent-report.json`, `container.log`).
+
+Агент-писатель использует `TestAgent:*` (образ, модель, лимиты, `TestHints`), а по времени ограничен и `TestAgent:TimeoutMinutes`, и `Agent:AnalysisTimeoutMinutes` (по умолчанию 20 минут на весь M2). Для тяжёлых стеков увеличьте `AnalysisTimeoutMinutes` и соответственно `RunTimeoutMinutes`.
+
 ## Безопасность и ограничения
 
 - Контейнер — единственная песочница: Codex запускается с `--dangerously-bypass-approvals-and-sandbox`, но внутри одноразового контейнера без переменных хоста, с лимитами CPU, памяти и процессов. Сеть открыта: она нужна для зависимостей.
@@ -94,6 +128,6 @@ Prompt построен как инструкция исполнителю, а �
 - `AllowDocker: true` монтирует Docker socket — это фактически root на хосте. Включайте только для доверенного репозитория, которому нужны Testcontainers или compose.
 - В текст отчёта попадает только хвост лога каждой команды (последние ~4000 символов). Публикуются только `agent/commands/*.log`, `agent/reports|coverage/**/*.xml|.trx`, `ledger.jsonl`, `agent-report.json`, `container.log`.
 - Покрытие считается, только если агент выдал Cobertura; LCOV и JaCoCo пока не разбираются. TAP и прочие форматы дают `Unverified`.
-- M2 по-прежнему генерирует только C# xUnit тесты; для других стеков M2 их не добавит, и запуск продолжится с тестами репозитория.
+- Сгенерированные тесты сохраняются только при успешной фазе `build` агента-писателя; тест, который падает из-за самого продукта, остаётся и попадает в QA-ветку (см. ниже).
 - Каждый повторный прогон worker (без сгенерированных тестов, baseline) — это новый полный запуск агента.
 - На Linux файлы, созданные в контейнере от root, могут помешать удалению рабочего каталога; на macOS Docker Desktop это не проявляется.

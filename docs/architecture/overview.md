@@ -38,7 +38,7 @@ GitHub push → Actions (self-hosted macOS) → HTTP API → PostgreSQL queue
 | `IGitWorkspace` | Изолированный checkout строго на `headSha`, diff `baseSha..headSha`, список файлов и история |
 | `ILlmClient` (`ICodexExecRunner`, `ICodexActivityStore`) | Структурированные ответы по заданной JSON-схеме через `codex exec`, учёт токенов; живая лента активности |
 | `IM2ContextReader` | Чтение ТЗ (из `SpecificationDirectory` профиля) и контекста изменения |
-| `IM2TestBuilder` | Запись и сборка сгенерированных тестов только в разрешённые пути; до двух попыток исправления ошибок генерации (в `M2Processor`) |
+| `IM2TestWriter` | Codex-агент в контейнере пишет тесты на языке и фреймворке репозитория (в том числе C#) только в разрешённые пути и проверяет их сборку; сервис перепроверяет результат; см. [написание тестов любого стека](../agent-test-execution.md#написание-тестов-любого-стека) |
 | `IM3Executor` | Сборка и запуск тестов выбранным режимом исполнения (по умолчанию Docker, `lead-qualification`, `agent`) |
 | `ICoverageCalculator` | Покрытие исполняемых изменённых строк по Cobertura |
 | `ISecretScanner` | Отдельное сканирование секретов в изменении и выходных артефактах |
