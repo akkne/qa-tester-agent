@@ -158,6 +158,15 @@ public sealed class LlmClientTests
     }
 
     [Fact]
+    public async Task Event_stream_skips_malformed_lines_and_keeps_reading()
+    {
+        using StreamReader stream = new(new MemoryStream(System.Text.Encoding.UTF8.GetBytes(
+            "{broken\n" + """{"type":"turn.completed","usage":{"input_tokens":7,"output_tokens":3}}""" + "\n")));
+
+        Assert.Equal((7, 3), await CodexEventStream.ReadUsageAsync(stream, null, CancellationToken.None));
+    }
+
+    [Fact]
     public void Host_registers_codex_client_without_api_configuration()
     {
         IConfiguration configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>

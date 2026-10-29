@@ -6,6 +6,7 @@ FROM debian:bookworm-slim
 ENV DEBIAN_FRONTEND=noninteractive \
     MISE_DATA_DIR=/opt/mise \
     MISE_YES=1 \
+    DOTNET_ROOT=/root/.dotnet \
     PATH=/opt/mise/shims:/root/.dotnet:/root/.dotnet/tools:$PATH \
     DOTNET_CLI_TELEMETRY_OPTOUT=1 \
     DOTNET_NOLOGO=1

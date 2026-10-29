@@ -113,7 +113,7 @@ public sealed record AgentExecution(
             return Result(SuiteVerdict.Flaky, "The test command failed before a later rerun passed.");
         if (reports.Length == 0)
             return Result(SuiteVerdict.Unverified, "No JUnit or TRX report; counts are agent-reported.");
-        if (reports.Sum(item => item.Total) == 0)
+        if (reports.Sum(item => item.Total - item.Skipped) == 0)
             return Result(SuiteVerdict.Blocked, "The reports contain no executed tests.");
         return Result(SuiteVerdict.Passed, null);
     }

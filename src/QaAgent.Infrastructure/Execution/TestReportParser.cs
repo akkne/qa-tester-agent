@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Xml;
 using System.Xml.Linq;
 using QaAgent.Application.Execution;
+using QaAgent.Infrastructure.Analysis;
 
 namespace QaAgent.Infrastructure.Execution;
 
@@ -38,7 +39,7 @@ public static class TestReportParser
 
     public static IReadOnlyList<CommandRecord> ReadLedger(string ledgerPath, string artifactsDirectory, ICollection<string> warnings)
     {
-        if (!File.Exists(ledgerPath)) return [];
+        if (!File.Exists(ledgerPath) || WorkspacePath.HasLink(Path.GetFullPath(artifactsDirectory), Path.GetFullPath(ledgerPath))) return [];
         List<CommandRecord> records = [];
         foreach (string line in File.ReadLines(ledgerPath))
         {
@@ -77,7 +78,8 @@ public static class TestReportParser
         if (normalized.Length == 0 || Path.IsPathRooted(normalized)) return null;
         string root = Path.GetFullPath(artifactsDirectory);
         string full = Path.GetFullPath(Path.Combine(root, normalized));
-        return full.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.Ordinal) ? full : null;
+        return full.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.Ordinal) && !WorkspacePath.HasLink(root, full)
+            ? full : null;
     }
 
     private static ParsedTestReport JUnit(string path, XElement root)
@@ -100,13 +102,15 @@ public static class TestReportParser
 
     private static ParsedTestReport Trx(string path, XElement root)
     {
-        XElement[] results = root.Descendants().Where(element => element.Name.LocalName == "UnitTestResult").ToArray();
+        // Data-driven tests nest one result per row under <InnerResults>; count the rows, not their parent too.
+        XElement[] results = root.Descendants().Where(element => element.Name.LocalName == "UnitTestResult" &&
+            !element.Descendants().Any(inner => inner.Name.LocalName == "UnitTestResult")).ToArray();
         List<string> failed = [];
         int skipped = 0;
         foreach (XElement result in results)
         {
             string outcome = result.Attribute("outcome")?.Value ?? "";
-            if (outcome is "Failed" or "Error" or "Timeout" or "Aborted")
+            if (outcome is "Failed" or "Error" or "Timeout" or "Aborted" or "Disconnected")
                 failed.Add(result.Attribute("testName")?.Value ?? "unnamed test");
             else if (outcome is "NotExecuted" or "Inconclusive" or "Pending")
                 skipped++;

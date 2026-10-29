@@ -13,7 +13,18 @@ public static class CodexEventStream
         {
             // Docker may interleave plain text (image pulls, entrypoint notices) with the JSONL stream.
             if (!line.StartsWith('{')) continue;
-            using JsonDocument document = JsonDocument.Parse(line);
+            JsonDocument document;
+            try
+            {
+                document = JsonDocument.Parse(line);
+            }
+            catch (JsonException)
+            {
+                // Keep draining stdout: a stalled pipe would block the child and surface as a timeout.
+                continue;
+            }
+
+            using JsonDocument _ = document;
             JsonElement root = document.RootElement;
             if (onEvent is not null) await onEvent(line);
             if (root.TryGetProperty("type", out JsonElement type) && type.GetString() == "turn.completed" &&

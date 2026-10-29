@@ -70,11 +70,23 @@ public sealed partial class LeadQualificationM3Executor(string artifactRoot) : I
             File.Delete(Path.Combine(artifacts, name + ".exit"));
         }
 
-        ProcessResult container = await RunAsync("docker",
-            ["run", "--rm", "--volume", $"{root}:/src", "--volume", $"{artifacts}:/artifacts",
-                "--workdir", "/src", "--env", "NUGET_PACKAGES=/artifacts/nuget",
-                "mcr.microsoft.com/dotnet/sdk:10.0", "bash", "-c", CheckScript],
-            root, Path.Combine(artifacts, "checks-container.log"), cancellationToken);
+        string containerName = $"qa-checks-{runId.ToString("N")[..12]}-{Guid.NewGuid().ToString("N")[..6]}";
+        ProcessResult container;
+        try
+        {
+            container = await RunAsync("docker",
+                ["run", "--rm", "--name", containerName, "--volume", $"{root}:/src", "--volume", $"{artifacts}:/artifacts",
+                    "--workdir", "/src", "--env", "NUGET_PACKAGES=/artifacts/nuget",
+                    "mcr.microsoft.com/dotnet/sdk:10.0", "bash", "-c", CheckScript],
+                root, Path.Combine(artifacts, "checks-container.log"), cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            // Killing the docker client does not stop the container.
+            await RunAsync("docker", ["rm", "--force", containerName], root,
+                Path.Combine(artifacts, "checks-container-stop.log"), CancellationToken.None);
+            throw;
+        }
 
         Dictionary<string, StageCheckResult> checks = new(StringComparer.Ordinal);
         foreach (string name in new[] { "restore", "build", "test", "host-smoke" })

@@ -17,6 +17,15 @@ public sealed class AgentExecutionTests
     }
 
     [Fact]
+    public void Suite_with_only_skipped_tests_is_blocked()
+    {
+        AgentExecution agent = Evaluate(Report(Suite("api")), [Test("api", 0)],
+            new Dictionary<string, IReadOnlyList<ParsedTestReport>> { ["api"] = [new ParsedTestReport("junit.xml", 4, 0, 4, [])] });
+
+        Assert.Equal(SuiteVerdict.Blocked, agent.Suites.Single().Verdict);
+    }
+
+    [Fact]
     public void Failed_test_in_report_fails_even_when_exit_code_is_zero()
     {
         AgentExecution agent = Evaluate(Report(Suite("api")), [Test("api", 0)], Reports("api", total: 3, failed: 1));

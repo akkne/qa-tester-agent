@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging;
 using QaAgent.Application.Abstractions;
 using QaAgent.Application.Analysis;
 using QaAgent.Application.Execution;
+using QaAgent.Infrastructure.Analysis;
 using QaAgent.Infrastructure.Llm;
 
 namespace QaAgent.Infrastructure.Execution;
@@ -35,17 +36,19 @@ public sealed class AgentM3Executor(
     ILogger<AgentM3Executor> logger) : IM3Executor
 {
     private static readonly JsonSerializerOptions ReportJson = new(JsonSerializerDefaults.Web);
+    // The container can write the repository; host git must not run hooks or an fsmonitor it planted.
+    private static readonly string[] SafeGit = ["-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null"];
 
     public async Task<M3Result> ExecuteAsync(GitSnapshot snapshot, Guid runId, CancellationToken cancellationToken)
     {
         string root = Path.GetFullPath(snapshot.WorkspacePath);
         string artifacts = Path.GetFullPath(Path.Combine(artifactRoot, runId.ToString("N")));
         Directory.CreateDirectory(artifacts);
-        ProcessResult sha = await RunAsync("git", ["-C", root, "rev-parse", "HEAD"], null, cancellationToken);
+        ProcessResult sha = await RunAsync("git", [.. SafeGit, "-C", root, "rev-parse", "HEAD"], null, cancellationToken);
         if (sha.ExitCode != 0 || !string.Equals(sha.Output.Trim(), snapshot.HeadSha.Value, StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("The test workspace does not match headSha.");
         // Host-side M2 builds leave macOS output; the Linux container must start from clean sources.
-        await RunAsync("git", ["-C", root, "clean", "-fdXq"], null, cancellationToken);
+        await RunAsync("git", [.. SafeGit, "-C", root, "clean", "-fdXq"], null, cancellationToken);
 
         // A repeated pass must never read evidence left by the previous one.
         string agentDirectory = Path.Combine(artifacts, "agent");
@@ -60,10 +63,15 @@ public sealed class AgentM3Executor(
         AgentTestReport? report = null;
         if (answer is not null)
         {
-            await File.WriteAllTextAsync(Path.Combine(agentDirectory, "agent-report.json"), answer, cancellationToken);
+            await WriteOwnedAsync(Path.Combine(agentDirectory, "agent-report.json"), answer, cancellationToken);
             try
             {
                 report = JsonSerializer.Deserialize<AgentTestReport>(answer, ReportJson);
+                if (!IsComplete(report))
+                {
+                    report = null;
+                    agentFailure = "The test agent report is missing required fields.";
+                }
             }
             catch (JsonException error)
             {
@@ -86,10 +94,15 @@ public sealed class AgentM3Executor(
                 .ToArray();
         }
 
-        ProcessResult diff = await RunAsync("git", ["-C", root, "diff", "--name-only", "HEAD"], null, cancellationToken);
-        string[] modified = diff.ExitCode == 0
-            ? diff.Output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            : ["(git diff failed: " + Tail(diff.Output) + ")"];
+        // Diff against the expected commit, so a commit made inside the container cannot hide edits.
+        ProcessResult head = await RunAsync("git", [.. SafeGit, "-C", root, "rev-parse", "HEAD"], null, cancellationToken);
+        ProcessResult diff = await RunAsync("git",
+            [.. SafeGit, "-C", root, "diff", "--name-only", snapshot.HeadSha.Value, "--"], null, cancellationToken);
+        string[] modified = diff.ExitCode != 0
+            ? ["(git diff failed: " + Tail(diff.Output) + ")"]
+            : !string.Equals(head.Output.Trim(), snapshot.HeadSha.Value, StringComparison.OrdinalIgnoreCase)
+                ? ["(HEAD moved to " + Tail(head.Output.Trim()) + ")"]
+                : diff.Output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
         AgentExecution agent = AgentExecution.Evaluate(report, ledger, reports, modified, inputTokens, outputTokens);
         agent = agent with
@@ -101,7 +114,8 @@ public sealed class AgentM3Executor(
         Dictionary<string, StageCheckResult> checks = new(StringComparer.Ordinal);
         foreach (CommandRecord record in ledger.OrderBy(item => item.Sequence))
         {
-            string summary = File.Exists(record.LogPath) ? Tail(await File.ReadAllTextAsync(record.LogPath, cancellationToken)) : "";
+            string summary = record.LogPath.Length > 0 && File.Exists(record.LogPath)
+                ? await ReadTailAsync(record.LogPath, cancellationToken) : "";
             checks[record.Suite + "/" + record.Phase] = new StageCheckResult(record.ExitCode == 0, record.ExitCode, record.LogPath, summary);
         }
 
@@ -154,6 +168,10 @@ public sealed class AgentM3Executor(
                 "--env", "QA_COMMAND_TIMEOUT=" + options.CommandTimeoutSeconds,
                 "--env", "QA_DOCKER_AVAILABLE=" + (options.AllowDocker ? "1" : "0")
             ];
+            // Git metadata stays read-only: a planted hook or fsmonitor would otherwise run on the host.
+            string git = Path.Combine(root, ".git");
+            if (Directory.Exists(git) || File.Exists(git))
+                arguments.AddRange(["--volume", $"{git}:{AgentTestContract.SourceMount}/.git:ro"]);
             if (useApiKey) arguments.AddRange(["--env", "CODEX_API_KEY"]);
             if (options.AllowDocker) arguments.AddRange(["--volume", "/var/run/docker.sock:/var/run/docker.sock"]);
             arguments.AddRange([options.Image, "codex", "exec", "--json", "--ephemeral", "--skip-git-repo-check",
@@ -202,11 +220,11 @@ public sealed class AgentM3Executor(
                 return (null, $"The test agent exceeded {options.TimeoutMinutes} minutes.", 0, 0);
             }
 
-            await File.WriteAllTextAsync(Path.Combine(agentDirectory, "container.log"), Tail(errors), cancellationToken);
+            await WriteOwnedAsync(Path.Combine(agentDirectory, "container.log"), Tail(errors), cancellationToken);
             await RestoreRotatedLoginAsync(useApiKey, authSource, authCopy, cancellationToken);
             (int input, int output) = usage ?? (0, 0);
             await TraceAsync(runId, "status", $"Test agent finished with exit {process.ExitCode}. Tokens: {input} in, {output} out.");
-            if (process.ExitCode != 0 || !File.Exists(answerPath))
+            if (process.ExitCode != 0 || !File.Exists(answerPath) || WorkspacePath.HasLink(control, answerPath))
                 // Raw stderr stays in the local container.log; the reason is published with the report.
                 return (null, $"The test agent exited {process.ExitCode} without a final report; see agent/container.log.",
                     input, output);
@@ -224,12 +242,17 @@ public sealed class AgentM3Executor(
     // ChatGPT logins rotate refresh tokens; keep the host login valid when the container refreshed it.
     private async Task RestoreRotatedLoginAsync(bool useApiKey, string source, string copy, CancellationToken cancellationToken)
     {
-        if (useApiKey || !File.Exists(copy)) return;
+        // The container owns /qa: only a regular file at the original location may replace the host login.
+        if (useApiKey || !File.Exists(copy) || WorkspacePath.HasLink(Path.GetDirectoryName(Path.GetDirectoryName(copy))!, copy))
+            return;
         string refreshed = await File.ReadAllTextAsync(copy, cancellationToken);
         if (refreshed == await File.ReadAllTextAsync(source, cancellationToken)) return;
         try
         {
-            using JsonDocument _ = JsonDocument.Parse(refreshed);
+            using JsonDocument login = JsonDocument.Parse(refreshed);
+            if (login.RootElement.ValueKind != JsonValueKind.Object || !login.RootElement.TryGetProperty("tokens", out _) &&
+                !login.RootElement.TryGetProperty("OPENAI_API_KEY", out _))
+                return;
             await File.WriteAllTextAsync(source, refreshed, cancellationToken);
         }
         catch (Exception error) when (error is JsonException or IOException or UnauthorizedAccessException)
@@ -278,10 +301,35 @@ public sealed class AgentM3Executor(
         foreach (string path in Directory.EnumerateFiles(own, "*", SearchOption.AllDirectories)
                      .Where(path => path.EndsWith(".xml", StringComparison.OrdinalIgnoreCase) ||
                          path.EndsWith(".trx", StringComparison.OrdinalIgnoreCase)))
-            if (seen.Add(path)) yield return (path, path);
+            if (!WorkspacePath.HasLink(agentDirectory, path) && seen.Add(path)) yield return (path, path);
     }
 
     private static string Tail(string value) => value.Length <= 4000 ? value : value[^4000..];
+
+    // Logs can be gigabytes; only the tail is published.
+    private static async Task<string> ReadTailAsync(string path, CancellationToken cancellationToken)
+    {
+        await using FileStream stream = File.OpenRead(path);
+        stream.Seek(Math.Max(0, stream.Length - 16_000), SeekOrigin.Begin);
+        using StreamReader reader = new(stream);
+        return Tail(await reader.ReadToEndAsync(cancellationToken));
+    }
+
+    // The container may have planted a link at this path; replace it instead of writing through it.
+    private static Task WriteOwnedAsync(string path, string content, CancellationToken cancellationToken)
+    {
+        File.Delete(path);
+        return File.WriteAllTextAsync(path, content, cancellationToken);
+    }
+
+    private static bool IsComplete(AgentTestReport? report) =>
+        report is { Status: not null, Suites: not null, NotRun: not null } &&
+        report.Suites.All(suite => suite is
+        {
+            Id: not null, Language: not null, Framework: not null, WorkingDirectory: not null,
+            ReportFiles: not null, CoverageFiles: not null, FailureSummary: not null, Notes: not null
+        }) &&
+        report.NotRun.All(item => item is { Path: not null, Reason: not null });
 
     private static async Task<ProcessResult> RunAsync(string executable, IReadOnlyList<string> arguments,
         string? workingDirectory, CancellationToken cancellationToken)

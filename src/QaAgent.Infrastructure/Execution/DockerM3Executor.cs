@@ -40,12 +40,34 @@ public sealed class DockerM3Executor(
             throw new InvalidOperationException("The test workspace does not match headSha.");
         }
 
+        // A repeated pass must never read check results left by the previous one.
+        foreach (string name in new[] { "restore", "format-whitespace", "format-style", "build", "test" })
+        {
+            File.Delete(Path.Combine(artifacts, name + ".log"));
+            File.Delete(Path.Combine(artifacts, name + ".exit"));
+        }
+
+        string testResults = Path.Combine(artifacts, "test-results");
+        if (Directory.Exists(testResults)) Directory.Delete(testResults, recursive: true);
+
         Dictionary<string, StageCheckResult> checks = new(StringComparer.Ordinal);
-        string[] dockerArgs = ["run", "--rm", "--volume", $"{root}:/src",
+        string containerName = $"qa-checks-{runId.ToString("N")[..12]}-{Guid.NewGuid().ToString("N")[..6]}";
+        string[] dockerArgs = ["run", "--rm", "--name", containerName, "--volume", $"{root}:/src",
             "--volume", $"{artifacts}:/artifacts", "--workdir", "/src",
             "--env", "NUGET_PACKAGES=/artifacts/nuget", Image, "bash", "-c", CheckScript];
-        ProcessResult container = await RunAsync("docker", dockerArgs, root,
-            Path.Combine(artifacts, "checks-container.log"), null, cancellationToken);
+        ProcessResult container;
+        try
+        {
+            container = await RunAsync("docker", dockerArgs, root,
+                Path.Combine(artifacts, "checks-container.log"), null, cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            // Killing the docker client does not stop the container.
+            await RunAsync("docker", ["rm", "--force", containerName], root,
+                Path.Combine(artifacts, "checks-container-stop.log"), null, CancellationToken.None);
+            throw;
+        }
         foreach (string name in new[] { "restore", "format-whitespace", "format-style", "build", "test" })
         {
             string log = Path.Combine(artifacts, name + ".log");
@@ -57,8 +79,8 @@ public sealed class DockerM3Executor(
             checks[name] = new StageCheckResult(code == 0, code, log, summary);
         }
 
-        string[] cobertura = Directory.Exists(Path.Combine(artifacts, "test-results"))
-            ? Directory.GetFiles(Path.Combine(artifacts, "test-results"), "coverage.cobertura.xml", SearchOption.AllDirectories)
+        string[] cobertura = Directory.Exists(testResults)
+            ? Directory.GetFiles(testResults, "coverage.cobertura.xml", SearchOption.AllDirectories)
             : [];
         CoverageResult coverage = await coverageCalculator.CalculateAsync(snapshot, cobertura, cancellationToken);
         (int? totalTests, int? failedTests) = TestCounts(artifacts);

@@ -48,6 +48,25 @@ public sealed class TestReportParserTests : IDisposable
     }
 
     [Fact]
+    public void Counts_trx_data_rows_once_and_disconnected_as_failed()
+    {
+        string path = Write("rows.trx", """
+            <TestRun xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010"><Results>
+              <UnitTestResult testName="Rows" outcome="Failed"><InnerResults>
+                <UnitTestResult testName="Rows (1)" outcome="Passed"/>
+                <UnitTestResult testName="Rows (2)" outcome="Failed"/>
+              </InnerResults></UnitTestResult>
+              <UnitTestResult testName="Crash" outcome="Disconnected"/>
+            </Results></TestRun>
+            """);
+
+        ParsedTestReport report = TestReportParser.Parse(path);
+
+        Assert.Equal((3, 2, 0), (report.Total, report.Failed, report.Skipped));
+        Assert.Equal(["Rows (2)", "Crash"], report.FailedTests);
+    }
+
+    [Fact]
     public void Rejects_unknown_malformed_and_dtd_reports()
     {
         Assert.NotNull(TestReportParser.Parse(Write("other.xml", "<coverage/>")).Error);
@@ -67,6 +86,26 @@ public sealed class TestReportParserTests : IDisposable
         Assert.Null(TestReportParser.MapArtifact(directory, "/artifacts/../etc/passwd"));
         Assert.Null(TestReportParser.MapArtifact(directory, "/src/junit.xml"));
         Assert.Null(TestReportParser.MapArtifact(directory, "../outside.xml"));
+    }
+
+    [Fact]
+    public void Rejects_paths_through_links_planted_in_the_artifacts_directory()
+    {
+        string outside = Directory.CreateTempSubdirectory("qa-agent-outside-").FullName;
+        try
+        {
+            File.WriteAllText(Path.Combine(outside, "secret.txt"), "host");
+            File.CreateSymbolicLink(Path.Combine(directory, "link.log"), Path.Combine(outside, "secret.txt"));
+            Directory.CreateSymbolicLink(Path.Combine(directory, "reports"), outside);
+
+            Assert.Null(TestReportParser.MapArtifact(directory, "link.log"));
+            Assert.Null(TestReportParser.MapArtifact(directory, "/artifacts/reports/secret.txt"));
+            Assert.Empty(TestReportParser.ReadLedger(Path.Combine(directory, "link.log"), directory, []));
+        }
+        finally
+        {
+            Directory.Delete(outside, recursive: true);
+        }
     }
 
     [Fact]
