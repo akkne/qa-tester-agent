@@ -37,9 +37,15 @@ public sealed class GitCliWorkspace(GitWorkspaceOptions options) : IGitWorkspace
         }
         catch
         {
-            if (Directory.Exists(workspace))
+            try
             {
-                Directory.Delete(workspace, recursive: true);
+                if (Directory.Exists(workspace))
+                {
+                    Directory.Delete(workspace, recursive: true);
+                }
+            }
+            catch (Exception cleanup) when (cleanup is IOException or UnauthorizedAccessException)
+            {
             }
 
             throw;

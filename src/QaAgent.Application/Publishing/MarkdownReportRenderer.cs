@@ -27,24 +27,24 @@ public static class MarkdownReportRenderer
         text.AppendLine();
         text.AppendLine("## Requirements and changed files");
         text.AppendLine();
-        foreach (string id in analysis.RequirementIds) text.AppendLine($"- `{Safe(id)}`");
-        foreach (ChangedFile file in snapshot.Files) text.AppendLine($"- `{Safe(file.ChangeKind)} {Safe(file.Path)}`");
+        foreach (string id in analysis.RequirementIds) text.AppendLine($"- {Code(id)}");
+        foreach (ChangedFile file in snapshot.Files) text.AppendLine($"- {Code(file.ChangeKind + " " + file.Path)}");
         text.AppendLine();
         text.AppendLine("## Verification plan");
         text.AppendLine();
         foreach (VerificationScenario scenario in analysis.Plan)
-            text.AppendLine($"- `{Safe(scenario.RequirementId)}` {Safe(scenario.Kind)}: {Safe(scenario.Expected)} — {Safe(scenario.Steps)}");
+            text.AppendLine($"- {Code(scenario.RequirementId)} {Safe(scenario.Kind)}: {Safe(scenario.Expected)} — {Safe(scenario.Steps)}");
         text.AppendLine();
         text.AppendLine("## Findings");
         text.AppendLine();
         if (analysis.Findings.Count == 0) text.AppendLine("No LLM findings.");
         foreach (AnalysisFinding finding in analysis.Findings)
-            text.AppendLine($"- **{Safe(finding.Status)} / {Safe(finding.Severity)}** `{Safe(finding.Path)}:{finding.Line}` ({Safe(finding.RequirementId)}): expected {Safe(finding.Expected)}; observed {Safe(finding.Observed)}; reproduce: {Safe(finding.Reproduction)}");
+            text.AppendLine($"- **{Safe(finding.Status)} / {Safe(finding.Severity)}** {Code(finding.Path + ":" + finding.Line)} ({Safe(finding.RequirementId)}): expected {Safe(finding.Expected)}; observed {Safe(finding.Observed)}; reproduce: {Safe(finding.Reproduction)}");
         text.AppendLine();
         text.AppendLine("## Candidate tests and execution");
         text.AppendLine();
         foreach (GeneratedTest test in analysis.Tests)
-            text.AppendLine($"- `{Safe(test.Path)}` — {Safe(test.Kind)}; {string.Join(", ", test.RequirementIds.Select(Safe))}");
+            text.AppendLine($"- {Code(test.Path)} — {Safe(test.Kind)}; {string.Join(", ", test.RequirementIds.Select(Safe))}");
         text.AppendLine($"- **Tests:** {execution.TotalTests?.ToString() ?? "unavailable"} total; {execution.FailedTests?.ToString() ?? "unavailable"} failed");
         foreach ((string name, StageCheckResult check) in execution.Checks)
             text.AppendLine($"- **{Safe(name)}:** {(check.Passed ? "passed" : "failed")} (exit {check.ExitCode}); {Safe(check.Summary)}");
@@ -62,14 +62,14 @@ public static class MarkdownReportRenderer
                 string counts = suite.Total is { } total
                     ? $"{total} total, {suite.Failed} failed, {suite.Skipped} skipped{(suite.CountsVerified ? "" : " (agent-reported)")}"
                     : "no counts";
-                text.AppendLine($"- **Suite `{Safe(suite.Id)}`** ({Safe(suite.Language)}/{Safe(suite.Framework)}, `{Safe(suite.WorkingDirectory)}`): " +
+                text.AppendLine($"- **Suite {Code(suite.Id)}** ({Safe(suite.Language)}/{Safe(suite.Framework)}, {Code(suite.WorkingDirectory)}): " +
                     $"{suite.Verdict}; {counts}{(suite.Reason is null ? "" : "; " + Safe(suite.Reason))}");
-                foreach (string test in suite.FailedTests.Take(20)) text.AppendLine($"  - failed: `{Safe(test)}`");
+                foreach (string test in suite.FailedTests.Take(20)) text.AppendLine($"  - failed: {Code(test)}");
                 if (suite.FailureSummary.Length > 0) text.AppendLine($"  - agent summary: {Safe(suite.FailureSummary)}");
                 if (suite.Notes.Length > 0) text.AppendLine($"  - agent notes: {Safe(suite.Notes)}");
             }
             foreach (AgentSkippedSuite skipped in agent.NotRun)
-                text.AppendLine($"- **Not run:** `{Safe(skipped.Path)}` — {Safe(skipped.Reason)}");
+                text.AppendLine($"- **Not run:** {Code(skipped.Path)} — {Safe(skipped.Reason)}");
             foreach (string warning in agent.Warnings) text.AppendLine($"- **Agent warning:** {Safe(warning)}");
         }
         if (execution.Coverage is { } coverage)
@@ -96,7 +96,18 @@ public static class MarkdownReportRenderer
         ? $"{percent}% ({metric.CoveredLines}/{metric.ExecutableLines})"
         : $"unavailable: {Safe(metric.Reason ?? "no executable lines")}";
 
-    private static string Safe(string value) => value.Replace("\\", "\\\\", StringComparison.Ordinal)
+    private static string Code(string? value)
+    {
+        string text = (value ?? "").Replace("\r", " ", StringComparison.Ordinal).Replace("\n", " ", StringComparison.Ordinal);
+        int longest = 0, run = 0;
+        foreach (char c in text)
+            longest = Math.Max(longest, run = c == '`' ? run + 1 : 0);
+        string fence = new('`', longest + 1);
+        string pad = text.StartsWith('`') || text.EndsWith('`') ? " " : "";
+        return fence + pad + text + pad + fence;
+    }
+
+    private static string Safe(string? value) => (value ?? "").Replace("\\", "\\\\", StringComparison.Ordinal)
         .Replace("<", "&lt;", StringComparison.Ordinal)
         .Replace(">", "&gt;", StringComparison.Ordinal)
         .Replace("`", "\\`", StringComparison.Ordinal)

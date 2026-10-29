@@ -18,9 +18,10 @@ if (pipelineConfigured)
     }
 
     if (builder.Configuration.GetValue<int>("Agent:WorkerCount") != 1 ||
-        builder.Configuration.GetValue<int>("Agent:StageTimeoutMinutes") <= 0)
+        builder.Configuration.GetValue<int>("Agent:StageTimeoutMinutes") <= 0 ||
+        builder.Configuration.GetValue<int>("Agent:RunTimeoutMinutes") <= 0)
     {
-        throw new InvalidOperationException("M1 requires one worker and a positive stage timeout.");
+        throw new InvalidOperationException("M1 requires one worker, a positive stage timeout and a positive run timeout.");
     }
 
     string urls = builder.Configuration["urls"] ?? "http://localhost:5000";

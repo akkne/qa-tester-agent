@@ -238,7 +238,7 @@ public sealed class RunWorker(
                 {
                     Directory.Delete(snapshot.WorkspacePath, recursive: true);
                 }
-                catch (IOException exception)
+                catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
                 {
                     logger.LogWarning(exception, "Could not remove workspace for run {RunId}", run.Id);
                 }
@@ -246,13 +246,13 @@ public sealed class RunWorker(
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
-            run.Block(m4Started ? "M4 publication timed out." : m3Started ? "M3 execution timed out." : gitPrepared ? "M2 analysis timed out." : "Git stage timed out.", clock.UtcNow);
+            if (run.State == RunState.Running) run.Block(m4Started ? "M4 publication timed out." : m3Started ? "M3 execution timed out." : gitPrepared ? "M2 analysis timed out." : "Git stage timed out.", clock.UtcNow);
             await TraceAsync("Run", run.FailureReason ?? "Run timed out.");
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
             logger.LogError(exception, "Run {RunId} failed during Git, M2, M3, or M4", run.Id);
-            run.Block($"{(m4Started ? "M4 publication" : m3Started ? "M3 execution" : gitPrepared ? "M2 analysis" : "Git range")} unavailable: {exception.Message}", clock.UtcNow);
+            if (run.State == RunState.Running) run.Block($"{(m4Started ? "M4 publication" : m3Started ? "M3 execution" : gitPrepared ? "M2 analysis" : "Git range")} unavailable: {exception.Message}", clock.UtcNow);
             await TraceAsync("Run", run.FailureReason ?? "Run failed.");
         }
 

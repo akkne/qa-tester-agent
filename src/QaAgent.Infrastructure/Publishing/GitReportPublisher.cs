@@ -33,11 +33,22 @@ public sealed class GitReportPublisher(
             throw new InvalidOperationException("Report directory is not allowed.");
         string reportPath = reportDirectory + "/commit_" + snapshot.HeadSha.Value[..12] + ".md";
         string localReport = Path.Combine(artifacts, "report.md");
-        IReadOnlyList<PublishedArtifact> manifest = ArtifactManifest(artifacts);
-        string markdown = MarkdownReportRenderer.Render(run, snapshot, analysis, execution, status, manifest, resultBaseUrl);
-        await File.WriteAllTextAsync(localReport, markdown, cancellationToken);
-        manifest = ArtifactManifest(artifacts);
         string branch = "qa/" + snapshot.HeadSha.Value[..12] + "-" + run.Id.ToString("N")[..12];
+        IReadOnlyList<PublishedArtifact> manifest = [];
+        string markdown;
+        try
+        {
+            manifest = ArtifactManifest(artifacts);
+            markdown = MarkdownReportRenderer.Render(run, snapshot, analysis, execution, status, manifest, resultBaseUrl);
+            await File.WriteAllTextAsync(localReport, markdown, cancellationToken);
+            manifest = ArtifactManifest(artifacts);
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception error)
+        {
+            return new PublishedReport(branch, reportPath, localReport, null, null, null, manifest,
+                "QA report rendering failed: " + error.Message);
+        }
         string? webBase = GitHubWebBase(remote);
         string[] allowed = analysis.Tests.Select(test => test.Path.Replace('\\', '/'))
             .Append(reportPath).Distinct(StringComparer.Ordinal).ToArray();

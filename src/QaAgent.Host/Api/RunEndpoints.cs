@@ -232,6 +232,8 @@ public static class RunEndpoints
         M3Result? execution = record.M3ResultJson is null ? null : JsonSerializer.Deserialize<M3Result>(record.M3ResultJson);
         PublishedReport? publication = record.M4ResultJson is null ? null : JsonSerializer.Deserialize<PublishedReport>(record.M4ResultJson);
         static string Escape(string? value) => System.Net.WebUtility.HtmlEncode(value ?? "");
+        static bool IsWebUrl(string? value) => Uri.TryCreate(value, UriKind.Absolute, out Uri? uri) &&
+            (uri.Scheme == Uri.UriSchemeHttps || uri.Scheme == Uri.UriSchemeHttp);
         StringBuilder html = new("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>QA result</title><style>body{font:16px system-ui,sans-serif;max-width:880px;margin:3rem auto;padding:0 1rem;color:#1b2633}h1{font-size:1.8rem}section{border-top:1px solid #ccd3db;padding:1rem 0}code{overflow-wrap:anywhere}li{margin:.4rem 0}.status{font-weight:700}a{color:#0759a5}.activity{list-style:none;padding:0}.activity li{border:1px solid #ccd3db;border-radius:8px;padding:.7rem;margin:.6rem 0}.activity small{color:#526579}.activity pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:28rem;overflow:auto;margin:.5rem 0 0;font:13px ui-monospace,monospace}</style></head><body>");
         html.Append("<h1>QA result</h1><p class=\"status\" id=\"run-status\">Status: ").Append(Escape(record.FinalStatus ?? record.State))
             .Append("</p><p>Run <code>").Append(id).Append("</code> (attempt ").Append(record.Attempt).Append(")</p><p>Range <code>")
@@ -296,8 +298,8 @@ public static class RunEndpoints
         if (publication is not null)
         {
             html.Append("<section><h2>Publication and evidence</h2>");
-            if (publication.ReportUrl is not null) html.Append("<p><a href=\"").Append(Escape(publication.ReportUrl)).Append("\">GitHub report</a></p>");
-            if (publication.BranchUrl is not null) html.Append("<p><a href=\"").Append(Escape(publication.BranchUrl)).Append("\">QA branch</a></p>");
+            if (IsWebUrl(publication.ReportUrl)) html.Append("<p><a href=\"").Append(Escape(publication.ReportUrl!)).Append("\">GitHub report</a></p>");
+            if (IsWebUrl(publication.BranchUrl)) html.Append("<p><a href=\"").Append(Escape(publication.BranchUrl!)).Append("\">QA branch</a></p>");
             if (publication.PublishError is not null) html.Append("<p>").Append(Escape(publication.PublishError)).Append("</p>");
             html.Append("<ul>");
             foreach (PublishedArtifact artifact in publication.Artifacts)

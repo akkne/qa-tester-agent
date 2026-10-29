@@ -55,4 +55,26 @@ public sealed class M4ReportTests
         Assert.DoesNotContain("**Stand:**", report);
         Assert.DoesNotContain("**Browser:**", report);
     }
+
+    [Fact]
+    public void Code_spans_are_raw_and_fenced_and_null_strings_are_tolerated()
+    {
+        string baseSha = new('a', 40);
+        string headSha = new('b', 40);
+        Run run = Run.Queue(Guid.NewGuid(), "owner/repo", CommitSha.Parse(baseSha),
+            CommitSha.Parse(headSha), 3, DateTimeOffset.UtcNow);
+        GitSnapshot snapshot = new("/tmp/workspace", CommitSha.Parse(baseSha), CommitSha.Parse(headSha),
+            [new ChangedFile("a`b<c>.cs", "M")], "");
+        M2Result analysis = new(["List<string>"], [],
+            [new AnalysisFinding("REQ-1", "`x`", 3, null!, null!, null!, null!, null!)], [], [], 0, 0, 0, true, null, []);
+        M3Result execution = new(headSha, "/tmp/artifacts", new Dictionary<string, StageCheckResult>(),
+            4, 1, null, true, null, false, "failed");
+
+        string report = MarkdownReportRenderer.Render(run, snapshot, analysis, execution, RunStatus.Failed,
+            [], "http://127.0.0.1:5080");
+
+        Assert.Contains("`List<string>`", report);
+        Assert.Contains("``M a`b<c>.cs``", report);
+        Assert.Contains("`` `x`:3 ``", report);
+    }
 }
