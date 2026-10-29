@@ -10,6 +10,7 @@
 | `src/QaAgent.Host/QaAgent.Host.csproj` | ASP.NET Core | API, страница результата, worker и единственный composition root | Application, Infrastructure, Domain |
 | `tests/QaAgent.UnitTests/QaAgent.UnitTests.csproj` | xUnit | Доменные правила и сценарии с рукописными фейками | Application, Domain |
 | `tests/QaAgent.IntegrationTests/QaAgent.IntegrationTests.csproj` | xUnit | Контракты и интеграции Git, PostgreSQL, HTTP и исполнения | Host, Infrastructure |
+| `tools/M3Probe/M3Probe.csproj` | console | Ручной запуск M3-исполнителя (`M3Probe SOURCE BASE_SHA HEAD_SHA ARTIFACT_ROOT [файл теста|--lead-qualification]`) против локального checkout для диагностики и приёмки | Infrastructure (и транзитивно Application, Domain) |
 | `demo/Demo.Web/Demo.Web.csproj` | ASP.NET Core | Проверяемое приложение регистрации и кабинета | Нет |
 | `demo/Demo.Tests/Demo.Tests.csproj` | xUnit | Стартовые, новые и браузерные проверки демопроекта | Demo.Web |
 

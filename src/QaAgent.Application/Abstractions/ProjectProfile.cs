@@ -6,8 +6,3 @@ public sealed record ProjectProfile(
     string SpecificationDirectory,
     IReadOnlyList<string> AllowedTestDirectories,
     string ReportDirectory);
-
-public interface IProjectProfileProvider
-{
-    ProjectProfile GetRequired(string profileId);
-}

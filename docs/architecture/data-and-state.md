@@ -2,18 +2,23 @@
 
 ## Модель PostgreSQL
 
-| Сущность | Ключевые поля |
+Вся схема — одна таблица `runs` (`RunRecord`, `RunDbContext`); отдельных таблиц этапов, находок, кандидатов, артефактов и расхода LLM нет. Результаты этапов хранятся JSON-колонками этой же строки.
+
+| Поле `runs` | Назначение |
 | --- | --- |
-| `Run` | `Id`, `RepositoryId`, `ProfileVersion`, `BaseSha`, `HeadSha`, `Trigger`, `State`, `FinalStatus`, `CreatedAt`, `StartedAt`, `FinishedAt`, `QaBranch`, `ReportPath`, `FailureReason` |
-| `RunStage` | `RunId`, `Name`, `State`, `Attempt`, `StartedAt`, `FinishedAt`, `ErrorCode`, `Summary` |
-| `Finding` | `RunId`, `RequirementId`, `Severity`, `EvidenceKind`, `File`, `Line`, `Expected`, `Actual`, `Reproduction`, `ArtifactIds` |
-| `TestCandidate` | `RunId`, `Path`, `ContentHash`, `RequirementIds`, `QaBranch`, `State`, `AcceptedInSha` |
-| `Artifact` | `RunId`, `Kind`, `LocalPath`, `PublicPath`, `Checksum`, `CreatedAt` |
-| `LlmUsage` | `RunId`, `Stage`, `Model`, `InputTokens`, `OutputTokens`, `EstimatedCost` |
+| `Id`, `RepositoryId`, `BaseSha`, `HeadSha`, `ProfileVersion`, `Attempt` | Идентификация запуска и ключ идемпотентности |
+| `State`, `FinalStatus`, `FailureReason` | Состояние процесса, итог и причина блокировки |
+| `CreatedAt`, `StartedAt`, `FinishedAt` | Время постановки в очередь, захвата worker и завершения |
+| `ChangedFilesJson`, `Diff` | Изменённые файлы и diff `baseSha..headSha` |
+| `M2ResultJson` | Анализ: требования, находки, сгенерированные тесты, предупреждения, расход токенов |
+| `M3ResultJson` | Исполнение: сборка, тесты, покрытие, ссылки на артефакты |
+| `M4ResultJson` | Публикация: QA-ветка, commit, путь отчёта |
+
+Индексы: уникальный `(RepositoryId, BaseSha, HeadSha, ProfileVersion, Attempt)` и `(State, CreatedAt)` для выбора очереди. Скриншоты, traces и логи лежат в `Agent:ArtifactRoot` на диске, а не в БД.
 
 `Run` одновременно служит элементом очереди. Создание запуска и запись ключа идемпотентности выполняются одной транзакцией через `IUnitOfWork`. Уникальный ключ: `(RepositoryId, BaseSha, HeadSha, ProfileVersion, Attempt)`. Повторная доставка того же push возвращает последнюю попытку. Если она завершилась `BLOCKED` или запрос содержит `rerun: true`, создаётся новая попытка `Attempt + 1` со своим `RunId` и своей QA-веткой; история прежних попыток сохраняется.
 
-Один worker выбирает самый старый `Queued` запуск и переводит его в `Running` условным атомарным обновлением; второй обработчик не сможет захватить ту же строку. В М1 `Running`, переживший лимит Git-этапа, завершается `BLOCKED` с объяснением; следующие фазы добавят безопасные контрольные пункты для длинных этапов. Побочные действия, включая push, повторяются идемпотентно по стабильному имени ветки и проверке commit SHA.
+Один worker выбирает самый старый `Queued` запуск и переводит его в `Running` условным атомарным обновлением; второй обработчик не сможет захватить ту же строку. При старте worker находит `Running` запуски с `StartedAt` старше `Agent:RunTimeoutMinutes + 1` минуты (прерванные рестартом или зависшие) и завершает их `BLOCKED` с причиной `Run did not finish before its timeout.`; контрольных пунктов внутри этапов нет, такой запуск не продолжается, а требует новой попытки. Побочные действия, включая push, повторяются идемпотентно по стабильному имени ветки и проверке commit SHA.
 
 ## Состояние процесса и итог
 
@@ -30,4 +35,4 @@
 
 ## Тесты-кандидаты
 
-Новый тест появляется в QA-ветке со статусом `Proposed`. Кандидат переходит в `Accepted` только после проверки его содержимого или явно принятого эквивалента в исходной ветке; совпадение одного пути недостаточно. Следующий запуск исполняет тесты из нового `headSha` и отдельно показывает открытых кандидатов предыдущих запусков; не копирует их молча в checkout и не объявляет принятыми. Для презентации разработчик принимает QA-ветку, поэтому второй push уже содержит эти тесты.
+Отдельной таблицы и состояний кандидатов (`Proposed`/`Accepted`) нет: сгенерированные тесты записаны в `M2ResultJson` запуска и публикуются в QA-ветке вместе с отчётом. Следующий запуск исполняет тесты из своего `headSha`; тесты предыдущей QA-ветки в checkout молча не копируются. Для презентации разработчик принимает QA-ветку обычным merge, поэтому следующий push уже содержит эти тесты.
