@@ -3,7 +3,11 @@ using QaAgent.Application.Abstractions;
 
 namespace QaAgent.Application.Analysis;
 
-public sealed class M2Processor(ILlmClient llm, IM2ContextReader contextReader, IM2TestBuilder testBuilder,
+/// <summary>
+/// Plans and analyzes the change through <see cref="ILlmClient"/>, then lets the Codex test-writing agent write tests
+/// in the repository's own stack. Every candidate is checked here before it can reach execution.
+/// </summary>
+public sealed class M2Processor(ILlmClient llm, IM2ContextReader contextReader, IM2TestWriter testWriter,
     ISecretScanner secretScanner)
 {
     private static readonly string[] RequiredKinds = ["positive", "negative", "access-control"];
@@ -34,7 +38,6 @@ public sealed class M2Processor(ILlmClient llm, IM2ContextReader contextReader, 
             "The changed test files in the context are existing coverage; propose additional tests only for gaps.\n");
         string planSchema = M2Schemas.WithRequirementIds(M2Schemas.Plan, knownIds);
         string findingSchema = M2Schemas.WithRequirementIds(M2Schemas.Findings, knownIds);
-        string testSchema = M2Schemas.WithRequirementIds(M2Schemas.Tests, knownIds);
         int inputTokens = 0;
         int outputTokens = 0;
         LlmResponse planResponse = await llm.GenerateAsync(new LlmRequest(
@@ -63,72 +66,37 @@ public sealed class M2Processor(ILlmClient llm, IM2ContextReader contextReader, 
         outputTokens += findingResponse.OutputTokens;
         IReadOnlyList<AnalysisFinding> findings = ParseFindings(findingResponse.Json, knownIds, snapshot.Files);
 
-        string generationPrompt =
-            "Generate executable C# xUnit tests for the changed behavior in JSON. " +
-            (specificationChanged
-                ? "Include separate positive, negative, and access-control tests. Include at least one test with kind exactly positive, one exactly negative, and one exactly access-control. "
-                : "Use only applicable kinds. Review changed existing tests first; return an empty tests array if they already cover the change. Do not generate tests for unrelated privacy requirements. ") +
-            "Every generated test must have a nonempty requirementIds array using the supplied trace ID. " +
-            "Assert the specified behavior even if the product is currently broken. " +
-            "The build treats analyzer and code-style warnings as errors: follow the supplied .editorconfig, " +
-            "always use braces for if/for/foreach/while bodies, and avoid unused usings or variables. " +
-            "Tests run offline in a Linux .NET SDK container without python, node or network access: " +
-            "do not start external processes or test CI workflow files; test the product's C# code. " +
-            "Only add new .cs files under these directories: " + string.Join(", ", profile.AllowedTestDirectories) +
-            ". Never edit product code, existing tests, or use Skip. Context:\n" + taskContext +
-            "\nVerification plan:\n" + planResponse.Json;
-        IReadOnlyList<GeneratedTest> tests = [];
-        TestBuildResult build = new(false, "No tests generated.");
-        int fixes = 0;
-        for (int attempt = 0; attempt <= 2; attempt++)
+        TestWritingResult written = await testWriter.WriteAsync(new TestWritingRequest(snapshot, profile, targetIds,
+            specificationChanged, taskContext, planResponse.Json, findingResponse.Json, runId), cancellationToken);
+        inputTokens += written.InputTokens;
+        outputTokens += written.OutputTokens;
+        IReadOnlyList<GeneratedTest> tests = written.Tests;
+        TestBuildResult build = written.Build;
+        // A rejected candidate only drops the generated tests; the plan and findings stay in the report.
+        if (tests.Count == 0 && build.Compiles)
         {
-            LlmResponse response = await llm.GenerateAsync(new LlmRequest(generationPrompt, testSchema)
-            { RunId = runId, Stage = attempt == 0 ? "Test generation" : $"Test repair {attempt}" }, cancellationToken);
-            inputTokens += response.InputTokens;
-            outputTokens += response.OutputTokens;
-            tests = ParseTests(response.Json, knownIds);
-            if (tests.Count == 0)
+            build = !specificationChanged &&
+                snapshot.Files.Any(file => file.ChangeKind != "D" && profile.AllowsTestPath(file.Path))
+                ? new TestBuildResult(true, "Changed existing tests will be compiled and run during execution.")
+                : new TestBuildResult(false, "No tests were generated for changed behavior and no changed tests were supplied.");
+        }
+        else if (tests.Count > 0)
+        {
+            try
             {
-                testBuilder.Cleanup();
+                if (specificationChanged) EnsureKinds(tests.Select(test => test.Kind), "Generated tests");
+                EnsureChangedRequirements(targetIds, tests.SelectMany(test => test.RequirementIds));
+                foreach (string id in tests.SelectMany(test => test.RequirementIds)) RequireId(knownIds, id);
             }
-
-            if (tests.Count == 0 && !specificationChanged && snapshot.Files.Any(file =>
-                    file.Path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase) &&
-                    profile.AllowedTestDirectories.Any(directory => Under(file.Path, directory))))
+            catch (InvalidOperationException error)
             {
-                build = new TestBuildResult(true, "Changed existing tests will be compiled and run during execution.");
-                break;
+                build = new TestBuildResult(false, error.Message);
             }
-
-            if (tests.Count == 0)
-            {
-                throw new InvalidOperationException("No tests were generated for changed behavior and no changed tests were supplied.");
-            }
-
-            if (specificationChanged) EnsureKinds(tests.Select(test => test.Kind), "Generated tests");
-            EnsureChangedRequirements(targetIds, tests.SelectMany(test => test.RequirementIds));
-            build = await testBuilder.BuildAsync(snapshot, profile, tests, cancellationToken);
-            if (build.Compiles)
-            {
-                break;
-            }
-
-            if (attempt == 2)
-            {
-                break;
-            }
-
-            fixes++;
-            generationPrompt =
-                "Fix only syntax, compilation, or test environment errors in the generated tests. " +
-                "Keep every assertion and expected result; do not add Skip or edit product code. " +
-                "Return the complete corrected tests as JSON. Previous tests:\n" + response.Json +
-                "\nBuild diagnostics:\n" + build.Diagnostics;
         }
 
         return new M2Result(targetIds, plan, findings, tests,
-            context.Gaps.Concat(gaps).Distinct(StringComparer.Ordinal).ToArray(),
-            inputTokens, outputTokens, fixes, build.Compiles, build.Compiles ? null : build.Diagnostics, secrets);
+            context.Gaps.Concat(gaps).Concat(written.Gaps).Distinct(StringComparer.Ordinal).ToArray(),
+            inputTokens, outputTokens, written.Fixes, build.Compiles, build.Compiles ? null : build.Diagnostics, secrets);
     }
 
     private static IReadOnlyList<VerificationScenario> ParsePlan(
@@ -188,32 +156,6 @@ public sealed class M2Processor(ILlmClient llm, IM2ContextReader contextReader, 
         }
 
         return findings;
-    }
-
-    private static IReadOnlyList<GeneratedTest> ParseTests(string json, HashSet<string> ids)
-    {
-        using JsonDocument document = Parse(json);
-        JsonElement root = document.RootElement;
-        RequireProperties(root, "tests");
-        List<GeneratedTest> tests = [];
-        foreach (JsonElement item in Array(root, "tests", 30))
-        {
-            RequireProperties(item, "path", "requirementIds", "kind", "source");
-            string[] testIds = Array(item, "requirementIds", 30).Select(element => element.GetString() ?? "").ToArray();
-            if (testIds.Length == 0)
-            {
-                throw new InvalidOperationException("Generated test has no requirement ID.");
-            }
-
-            foreach (string id in testIds)
-            {
-                RequireId(ids, id);
-            }
-
-            tests.Add(new GeneratedTest(String(item, "path"), testIds, Kind(item), String(item, "source")));
-        }
-
-        return tests;
     }
 
     private static JsonDocument Parse(string json)
@@ -302,7 +244,4 @@ public sealed class M2Processor(ILlmClient llm, IM2ContextReader contextReader, 
             throw new InvalidOperationException("Plan or generated tests omit a changed requirement ID.");
         }
     }
-
-    private static bool Under(string path, string directory) =>
-        path.StartsWith(directory.TrimEnd('/') + "/", StringComparison.Ordinal);
 }

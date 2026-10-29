@@ -24,6 +24,5 @@ public sealed class M2SchemasTests
     {
         yield return [M2Schemas.Plan];
         yield return [M2Schemas.Findings];
-        yield return [M2Schemas.Tests];
     }
 }

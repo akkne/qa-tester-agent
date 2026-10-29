@@ -12,105 +12,127 @@ public sealed class M2ProcessorTests
     private const string Findings = """
         {"findings":[{"requirementId":"DEMO-01","path":"demo/Demo.Web/Program.cs","line":12,"severity":"high","expected":"private","observed":"route may expose account","reproduction":"login as A then request B","status":"reproduced"}]}
         """;
-    private const string Tests = """
-        {"tests":[{"path":"demo/Demo.Tests/Generated/Positive.cs","requirementIds":["DEMO-01"],"kind":"positive","source":"[Fact] public void Positive() { Assert.True(1 == 1); }"},{"path":"demo/Demo.Tests/Generated/Negative.cs","requirementIds":["DEMO-01"],"kind":"negative","source":"[Fact] public void Negative() { Assert.True(1 == 1); }"},{"path":"demo/Demo.Tests/Generated/Access.cs","requirementIds":["DEMO-01"],"kind":"access-control","source":"[Fact] public void Access() { Assert.True(1 == 1); }"}]}
+    private const string TechnicalPlan = """
+        {"scenarios":[{"requirementId":"CHANGE-BBBBBBBBBBBB","kind":"positive","expected":"feature enabled","steps":"check startup"}],"contextGaps":[]}
         """;
 
+    private static readonly GeneratedTest[] AllKinds =
+    [
+        new("demo/Demo.Tests/Generated/PositiveTests.cs", ["DEMO-01"], "positive", "[Fact] public void P() { Assert.True(ok); }"),
+        new("demo/Demo.Tests/Generated/NegativeTests.cs", ["DEMO-01"], "negative", "[Fact] public void N() { Assert.False(ok); }"),
+        new("demo/Demo.Tests/Generated/AccessTests.cs", ["DEMO-01"], "access-control", "[Fact] public void A() { Assert.False(ok); }")
+    ];
+
     [Fact]
-    public async Task GenerationFixesAtMostTwiceAndFindingsStayHypotheses()
+    public async Task WriterProducesTestsAndFindingsStayHypotheses()
     {
-        FakeLlm llm = new(Plan, Findings, Tests, Tests, Tests);
-        FakeBuilder builder = new(false, false, true);
-        M2Result result = await new M2Processor(llm, new FakeContext(), builder, new FakeScanner())
+        FakeLlm llm = new(Plan, Findings);
+        FakeWriter writer = new(AllKinds, true, fixes: 2);
+
+        M2Result result = await new M2Processor(llm, new FakeContext(), writer, new FakeScanner())
             .ProcessAsync(Snapshot(), Profile(), CancellationToken.None);
 
         Assert.True(result.TestsCompile);
-        Assert.Equal(2, result.GenerationFixes);
-        Assert.Equal(5, llm.Calls);
-        Assert.Equal("hypothesis", Assert.Single(result.Findings).Status);
         Assert.Equal(3, result.Tests.Count);
+        Assert.Equal(2, result.GenerationFixes);
+        Assert.Equal(2, llm.Calls);
+        Assert.Equal((2 * 10) + 7, result.InputTokens);
+        Assert.Equal("hypothesis", Assert.Single(result.Findings).Status);
+        Assert.Equal(["DEMO-01"], writer.Request!.RequirementIds);
+        Assert.True(writer.Request.SpecificationChanged);
+        Assert.Contains("\"access-control\"", writer.Request.PlanJson);
     }
 
     [Fact]
-    public async Task InvalidRequirementIdStopsBeforeTestGeneration()
+    public async Task InvalidRequirementIdStopsBeforeTestWriting()
     {
         FakeLlm llm = new(Plan.Replace("DEMO-01", "UNKNOWN", StringComparison.Ordinal));
-        M2Processor processor = new(llm, new FakeContext(), new FakeBuilder(true), new FakeScanner());
+        FakeWriter writer = new(AllKinds, true);
+        M2Processor processor = new(llm, new FakeContext(), writer, new FakeScanner());
 
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             processor.ProcessAsync(Snapshot(), Profile(), CancellationToken.None));
         Assert.Equal(1, llm.Calls);
+        Assert.Null(writer.Request);
     }
 
     [Fact]
-    public async Task ProductFailureDoesNotTriggerGenerationFix()
+    public async Task FailedWriterBuildIsReportedWithItsDiagnostics()
     {
-        FakeLlm llm = new(Plan, Findings, Tests);
-        FakeBuilder builder = new(true);
-        M2Result result = await new M2Processor(llm, new FakeContext(), builder, new FakeScanner())
+        M2Result result = await new M2Processor(new FakeLlm(Plan, Findings), new FakeContext(),
+            new FakeWriter(AllKinds, false), new FakeScanner()).ProcessAsync(Snapshot(), Profile(), CancellationToken.None);
+
+        Assert.False(result.TestsCompile);
+        Assert.Equal("build failed", result.BuildDiagnostics);
+    }
+
+    [Fact]
+    public async Task MissingKindDropsTestsButKeepsPlanAndFindings()
+    {
+        FakeWriter writer = new([AllKinds[0]], true);
+
+        M2Result result = await new M2Processor(new FakeLlm(Plan, Findings), new FakeContext(), writer, new FakeScanner())
             .ProcessAsync(Snapshot(), Profile(), CancellationToken.None);
 
-        Assert.Equal(0, result.GenerationFixes);
-        Assert.Equal(3, llm.Calls);
+        Assert.False(result.TestsCompile);
+        Assert.Contains("positive, negative, and access-control", result.BuildDiagnostics);
+        Assert.Equal(3, result.Plan.Count);
+        Assert.Single(result.Findings);
     }
 
     [Fact]
-    public async Task TechnicalChangeCanUseChangedExistingTestsWithoutGeneratingMore()
+    public async Task UnknownRequirementIdFromWriterIsRejected()
     {
-        const string plan = """
-            {"scenarios":[{"requirementId":"CHANGE-BBBBBBBBBBBB","kind":"positive","expected":"feature enabled","steps":"run existing composition test"}],"contextGaps":[]}
-            """;
-        FakeLlm llm = new(plan, """{"findings":[]}""", """{"tests":[]}""");
-        FakeBuilder builder = new();
-        GitSnapshot snapshot = Snapshot() with
-        {
-            Files = [new ChangedFile("demo/Demo.Tests/Host/CompositionTests.cs", "M")]
-        };
+        GeneratedTest[] tests = [.. AllKinds, new("demo/Demo.Tests/Generated/Other.cs", ["OTHER-9"], "boundary", "Assert.True(x);")];
 
-        M2Result result = await new M2Processor(llm, new TechnicalContext(), builder, new FakeScanner())
-            .ProcessAsync(snapshot, Profile(), CancellationToken.None);
+        M2Result result = await new M2Processor(new FakeLlm(Plan, Findings), new FakeContext(),
+            new FakeWriter(tests, true), new FakeScanner()).ProcessAsync(Snapshot(), Profile(), CancellationToken.None);
+
+        Assert.False(result.TestsCompile);
+        Assert.Contains("OTHER-9", result.BuildDiagnostics);
+    }
+
+    [Fact]
+    public async Task TechnicalChangeCanUseChangedExistingTestsOfAnyLanguage()
+    {
+        GitSnapshot snapshot = Snapshot() with { Files = [new ChangedFile("demo/Demo.Tests/test_feature.py", "M")] };
+
+        M2Result result = await new M2Processor(new FakeLlm(TechnicalPlan, """{"findings":[]}"""), new TechnicalContext(),
+            new FakeWriter([], true), new FakeScanner()).ProcessAsync(snapshot, Profile(), CancellationToken.None);
 
         Assert.True(result.TestsCompile);
         Assert.Empty(result.Tests);
         Assert.Equal(["CHANGE-BBBBBBBBBBBB"], result.RequirementIds);
-        Assert.Equal(3, llm.Calls);
-        Assert.Equal(0, builder.Calls);
     }
 
     [Fact]
-    public async Task TechnicalChangeWithoutExistingOrGeneratedTestsIsRejected()
+    public async Task TechnicalChangeWithoutExistingOrWrittenTestsIsReported()
     {
-        const string plan = """
-            {"scenarios":[{"requirementId":"CHANGE-BBBBBBBBBBBB","kind":"positive","expected":"feature enabled","steps":"check startup"}],"contextGaps":[]}
-            """;
-        FakeLlm llm = new(plan, """{"findings":[]}""", """{"tests":[]}""");
+        M2Result result = await new M2Processor(new FakeLlm(TechnicalPlan, """{"findings":[]}"""), new TechnicalContext(),
+            new FakeWriter([], true), new FakeScanner()).ProcessAsync(Snapshot(), Profile(), CancellationToken.None);
 
-        InvalidOperationException error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            new M2Processor(llm, new TechnicalContext(), new FakeBuilder(), new FakeScanner())
-                .ProcessAsync(Snapshot(), Profile(), CancellationToken.None));
-
-        Assert.Contains("No tests were generated", error.Message);
+        Assert.False(result.TestsCompile);
+        Assert.Contains("No tests were generated", result.BuildDiagnostics);
+        Assert.Single(result.Plan);
     }
 
+    [Theory]
+    [InlineData("demo/Demo.Tests/test_a.py", true)]
+    [InlineData("demo/Demo.Tests/Sub/A.cs", true)]
+    [InlineData("demo/Demo.Testsx/A.cs", false)]
+    [InlineData("demo/Demo.Tests/../Web/A.cs", false)]
+    [InlineData("/demo/Demo.Tests/A.cs", false)]
+    [InlineData("demo/Demo.Web/a_test.go", false)]
+    public void ProfileAllowsOnlyPathsInsideTestDirectories(string path, bool allowed) =>
+        Assert.Equal(allowed, Profile().AllowsTestPath(path));
+
     [Fact]
-    public async Task EmptyRepairRemovesPreviouslyWrittenGeneratedTests()
+    public void RootTestDirectoryAllowsTestsNextToTheCode()
     {
-        const string plan = """
-            {"scenarios":[{"requirementId":"CHANGE-BBBBBBBBBBBB","kind":"positive","expected":"feature enabled","steps":"check startup"}],"contextGaps":[]}
-            """;
-        const string tests = """
-            {"tests":[{"path":"demo/Demo.Tests/Generated/Positive.cs","requirementIds":["CHANGE-BBBBBBBBBBBB"],"kind":"positive","source":"[Fact] public void Positive() { Assert.True(1 == 1); }"}]}
-            """;
-        FakeLlm llm = new(plan, """{"findings":[]}""", tests, """{"tests":[]}""");
-        FakeBuilder builder = new(false);
-        GitSnapshot snapshot = new("/tmp/snapshot", CommitSha.Parse(new string('a', 40)), CommitSha.Parse(new string('b', 40)),
-            [new ChangedFile("demo/Demo.Tests/Existing.cs", "M")], "diff");
+        ProjectProfile profile = Profile() with { AllowedTestDirectories = ["."] };
 
-        M2Result result = await new M2Processor(llm, new TechnicalContext(), builder, new FakeScanner())
-            .ProcessAsync(snapshot, Profile(), CancellationToken.None);
-
-        Assert.Empty(result.Tests);
-        Assert.Equal(1, builder.Cleanups);
+        Assert.True(profile.AllowsTestPath("pkg/pricing/price_test.go"));
+        Assert.False(profile.AllowsTestPath("../outside_test.go"));
     }
 
     private static GitSnapshot Snapshot() => new("/tmp/snapshot", CommitSha.Parse(new string('a', 40)),
@@ -144,16 +166,15 @@ public sealed class M2ProcessorTests
             Task.FromResult(new LlmResponse(responses[Calls++], 10, 20));
     }
 
-    private sealed class FakeBuilder(params bool[] results) : IM2TestBuilder
+    private sealed class FakeWriter(IReadOnlyList<GeneratedTest> tests, bool compiles, int fixes = 0) : IM2TestWriter
     {
-        private int count;
-        public int Calls => count;
-        public int Cleanups { get; private set; }
+        public TestWritingRequest? Request { get; private set; }
 
-        public void Cleanup() => Cleanups++;
-
-        public Task<TestBuildResult> BuildAsync(GitSnapshot snapshot, ProjectProfile profile,
-            IReadOnlyList<GeneratedTest> tests, CancellationToken cancellationToken) =>
-            Task.FromResult(new TestBuildResult(results[count++], "compile error"));
+        public Task<TestWritingResult> WriteAsync(TestWritingRequest request, CancellationToken cancellationToken)
+        {
+            Request = request;
+            return Task.FromResult(new TestWritingResult(tests, new TestBuildResult(compiles, compiles ? "" : "build failed"),
+                [], 7, 9, fixes));
+        }
     }
 }

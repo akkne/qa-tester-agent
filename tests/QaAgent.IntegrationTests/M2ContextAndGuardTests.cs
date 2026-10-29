@@ -92,26 +92,6 @@ public sealed class M2ContextAndGuardTests
         }
     }
 
-    [Theory]
-    [InlineData("../Outside.cs", "[Fact] void T() { Assert.True(false); }")]
-    [InlineData("demo/Demo.Web/Bad.cs", "[Fact] void T() { Assert.True(false); }")]
-    [InlineData("demo/Demo.Tests/Generated/Bad.cs", "[Fact(Skip=\"disabled\")] void T() { Assert.True(false); }")]
-    public async Task RejectsUnsafeGeneratedTests(string path, string source)
-    {
-        string root = Path.Combine(Path.GetTempPath(), "qa-m2-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(root);
-        try
-        {
-            GeneratedTest test = new(path, ["DEMO-REG-01"], "positive", source);
-            await Assert.ThrowsAsync<InvalidOperationException>(() =>
-                new M2TestBuilder().BuildAsync(Snapshot(root, [], ""), Profile(), [test], CancellationToken.None));
-        }
-        finally
-        {
-            Directory.Delete(root, recursive: true);
-        }
-    }
-
     [Fact]
     public async Task SecretScannerIgnoresNoNewlineMarkerForLineNumbers()
     {
@@ -162,30 +142,6 @@ public sealed class M2ContextAndGuardTests
 
             await Assert.ThrowsAsync<InvalidOperationException>(() => new M2ContextReader().ReadAsync(
                 Snapshot(root, [new ChangedFile("demo/Demo.Web/Link.cs", "A")], "diff"), Profile(), CancellationToken.None));
-        }
-        finally
-        {
-            Directory.Delete(root, recursive: true);
-            Directory.Delete(outside, recursive: true);
-        }
-    }
-
-    [Fact]
-    public async Task GeneratedTestUnderSymlinkedDirectoryIsRejected()
-    {
-        string root = Path.Combine(Path.GetTempPath(), "qa-m2-" + Guid.NewGuid().ToString("N"));
-        string outside = Path.Combine(Path.GetTempPath(), "qa-m2-out-" + Guid.NewGuid().ToString("N"));
-        try
-        {
-            Directory.CreateDirectory(Path.Combine(root, "demo/Demo.Tests"));
-            Directory.CreateDirectory(outside);
-            Directory.CreateSymbolicLink(Path.Combine(root, "demo/Demo.Tests/Generated"), outside);
-            GeneratedTest test = new("demo/Demo.Tests/Generated/Evil.cs", ["DEMO-REG-01"], "positive",
-                "[Fact] void T() { Assert.True(false); }");
-
-            await Assert.ThrowsAsync<InvalidOperationException>(() =>
-                new M2TestBuilder().BuildAsync(Snapshot(root, [], ""), Profile(), [test], CancellationToken.None));
-            Assert.Empty(Directory.GetFiles(outside));
         }
         finally
         {

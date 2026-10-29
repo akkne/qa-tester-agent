@@ -67,7 +67,12 @@ public static class ServiceCollectionExtensions
                 : configuration["Agent:ResultBaseUrl"]!));
         services.AddLlmClient(configuration);
         services.AddScoped<IM2ContextReader, M2ContextReader>();
-        services.AddScoped<IM2TestBuilder, M2TestBuilder>();
+        // Tests of every stack, C# included, are written by the Codex agent in the test-runner container.
+        services.AddScoped<IM2TestWriter>(provider => new AgentTestWriter(
+            configuration["Agent:ArtifactRoot"] ?? "artifacts",
+            TestAgentOptions(configuration),
+            provider.GetRequiredService<ICodexActivityStore>(),
+            provider.GetRequiredService<ILogger<AgentTestWriter>>()));
         services.AddScoped<ISecretScanner, DiffSecretScanner>();
         services.AddScoped<M2Processor>();
         services.AddHostedService<RunWorker>();

@@ -158,7 +158,8 @@ public sealed class RunWorker(
                 await TraceAsync("Execution", "Running build, tests and browser checks.");
                 IM3Executor executor = scope.ServiceProvider.GetRequiredService<IM3Executor>();
                 M3Result executed = await executor.ExecuteAsync(snapshot, run.Id, runTimeout.Token);
-                if (!executed.BuildPassed && result.Tests.Count > 0)
+                // Agent checks are keyed by suite; a failed suite build reaches the Failed branch below instead.
+                if (executed.Profile != M3ExecutionProfile.Agent && !executed.BuildPassed && result.Tests.Count > 0)
                 {
                     // The Linux build applies the product's analyzers; a generated test must not fail the product.
                     string buildSummary = executed.Checks.TryGetValue("build", out StageCheckResult? build) ? build.Summary : "";
@@ -177,7 +178,9 @@ public sealed class RunWorker(
                     // fails in the container (or encodes a wrong guess) cannot fail the push on its own.
                     await TraceAsync("Execution", "Checks failed with generated tests; repeating checks without them.");
                     string generatedFailure = executed.Checks.TryGetValue("test", out StageCheckResult? failedTest)
-                        ? failedTest.Summary : "";
+                        ? failedTest.Summary
+                        : string.Join("; ", executed.Agent?.Suites.Where(suite => suite.Verdict == SuiteVerdict.Failed)
+                            .Select(suite => $"{suite.Id}: {suite.Reason} {string.Join(", ", suite.FailedTests.Take(10))}") ?? []);
                     string generatedLog = Path.Combine(executed.ArtifactDirectory, "generated-tests-test.log");
                     if (failedTest is not null && File.Exists(failedTest.LogPath))
                         File.Copy(failedTest.LogPath, generatedLog, overwrite: true);

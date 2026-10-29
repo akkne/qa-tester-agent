@@ -38,11 +38,17 @@ public static class AgentTestContract
         {"type":"object","additionalProperties":false,"required":["status","blockReason","suites","notRun"],"properties":{"status":{"type":"string","enum":["completed","blocked"]},"blockReason":{"type":["string","null"]},"suites":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["id","language","framework","workingDirectory","reportFiles","coverageFiles","counts","failureSummary","notes"],"properties":{"id":{"type":"string"},"language":{"type":"string"},"framework":{"type":"string"},"workingDirectory":{"type":"string"},"reportFiles":{"type":"array","items":{"type":"string"}},"coverageFiles":{"type":"array","items":{"type":"string"}},"counts":{"anyOf":[{"type":"null"},{"type":"object","additionalProperties":false,"required":["total","failed","skipped"],"properties":{"total":{"type":"integer"},"failed":{"type":"integer"},"skipped":{"type":"integer"}}}]},"failureSummary":{"type":"string"},"notes":{"type":"string"}}}},"notRun":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["path","reason"],"properties":{"path":{"type":"string"},"reason":{"type":"string"}}}}}}
         """;
 
-    public static string Prompt(IReadOnlyList<string> hints, bool dockerAvailable, int commandTimeoutSeconds)
+    public static string Prompt(IReadOnlyList<string> hints, bool dockerAvailable, int commandTimeoutSeconds,
+        IReadOnlyList<string>? addedFiles = null)
     {
         string projectHints = hints.Count == 0
             ? "None."
             : string.Join("\n", hints.Select(hint => "- " + hint));
+        string added = addedFiles is not { Count: > 0 }
+            ? ""
+            : "\n\n# Tests added by the service\nThese untracked files are new tests written for this commit. `git ls-files` " +
+              "does not list them, but they are part of the checkout: make sure the suites that contain them run them.\n" +
+              string.Join("\n", addedFiles.Take(200).Select(file => "- " + file));
         return $$"""
             You are the test-execution agent of an automated QA service. The repository under test is checked out at
             {{SourceMount}} at a fixed commit, inside a disposable Linux container. Your only job: discover every automated
@@ -114,7 +120,7 @@ public static class AgentTestContract
                keep the failing qa-run records, describe the problem in notes and move on to the next suite.
 
             # Project hints from the service configuration
-            {{projectHints}}
+            {{projectHints}}{{added}}
 
             # Output
             Return only JSON matching the supplied schema.

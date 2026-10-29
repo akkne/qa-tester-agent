@@ -45,10 +45,11 @@ public sealed partial class M2ContextReader : IM2ContextReader
         }
 
         int sourceBudget = 80_000;
+        string specDirectory = profile.SpecificationDirectory.Replace('\\', '/').TrimEnd('/') + "/";
         foreach (ChangedFile file in snapshot.Files)
         {
-            if (!file.Path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase) ||
-                profile.AllowedTestDirectories.Any(directory => Under(file.Path, directory)))
+            if (!IsTextSource(file.Path) || file.Path.StartsWith(specDirectory, StringComparison.Ordinal) ||
+                IsTestPath(profile, file.Path))
             {
                 continue;
             }
@@ -57,6 +58,11 @@ public sealed partial class M2ContextReader : IM2ContextReader
             if (File.Exists(path))
             {
                 string content = await File.ReadAllTextAsync(path, cancellationToken);
+                if (content.Contains('\0', StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
                 int allowed = Math.Min(content.Length, sourceBudget);
                 Append(text, root, path, content, allowed);
                 sourceBudget -= allowed;
@@ -74,44 +80,41 @@ public sealed partial class M2ContextReader : IM2ContextReader
         }
 
         int testBudget = 40_000;
-        foreach (string directory in profile.AllowedTestDirectories)
+        HashSet<string> changedTests = snapshot.Files
+            .Where(file => IsTextSource(file.Path) && IsTestPath(profile, file.Path))
+            .Select(file => Resolve(root, file.Path))
+            .ToHashSet(StringComparer.Ordinal);
+        string[] testPaths = RepositoryFiles(root)
+            .Where(path => IsTextSource(path) && IsTestPath(profile, Relative(root, path)))
+            .OrderBy(path => !changedTests.Contains(path))
+            .ThenBy(path => changedTests.Any(changed =>
+                Path.GetDirectoryName(changed) == Path.GetDirectoryName(path)) ? 0 : 1)
+            .ThenBy(path => path, StringComparer.Ordinal)
+            .ToArray();
+        foreach (string path in testPaths)
         {
-            string testRoot = Resolve(root, directory);
-            if (!Directory.Exists(testRoot))
+            if (testBudget == 0)
+            {
+                gaps.Add("Existing test context budget exhausted.");
+                break;
+            }
+
+            string content = await File.ReadAllTextAsync(path, cancellationToken);
+            if (content.Contains('\0', StringComparison.Ordinal))
             {
                 continue;
             }
 
-            HashSet<string> changedTests = snapshot.Files
-                .Where(file => file.Path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase) &&
-                    Under(file.Path, directory))
-                .Select(file => Resolve(root, file.Path))
-                .ToHashSet(StringComparer.Ordinal);
-            string[] paths = Directory.EnumerateFiles(testRoot, "*.cs", SearchOption.AllDirectories)
-                .Where(path => !WorkspacePath.HasLink(root, path))
-                .OrderBy(path => !changedTests.Contains(path))
-                .ThenBy(path => changedTests.Any(changed =>
-                    Path.GetDirectoryName(changed) == Path.GetDirectoryName(path)) ? 0 : 1)
-                .ThenBy(path => path, StringComparer.Ordinal)
-                .ToArray();
-            foreach (string path in paths)
-            {
-                if (testBudget == 0)
-                {
-                    gaps.Add("Existing test context budget exhausted.");
-                    break;
-                }
-
-                string content = await File.ReadAllTextAsync(path, cancellationToken);
-                int allowed = Math.Min(content.Length, testBudget);
-                Append(text, root, path, content, allowed);
-                testBudget -= allowed;
-            }
+            int allowed = Math.Min(content.Length, testBudget);
+            Append(text, root, path, content, allowed);
+            testBudget -= allowed;
         }
 
-        foreach (string path in Directory.EnumerateFiles(root, "*.csproj", SearchOption.AllDirectories)
-            .Where(path => !WorkspacePath.HasLink(root, path))
-            .Where(path => !path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
+        // Manifests tell the model which language, test framework and assertion library the repository uses.
+        foreach (string path in RepositoryFiles(root)
+            .Where(path => Manifests.Contains(Path.GetFileName(path)) ||
+                path.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase) ||
+                ConfigRegex().IsMatch(Path.GetFileName(path)))
             .Order(StringComparer.Ordinal).Take(20))
         {
             string content = await File.ReadAllTextAsync(path, cancellationToken);
@@ -181,10 +184,81 @@ public sealed partial class M2ContextReader : IM2ContextReader
         return path;
     }
 
-    private static bool Under(string path, string directory) =>
-        path.StartsWith(directory.TrimEnd('/') + "/", StringComparison.Ordinal);
+    // An explicit test directory holds test code and its helpers; with "." only files named like tests count.
+    private static bool IsTestPath(ProjectProfile profile, string path)
+    {
+        string normalized = path.Replace('\\', '/');
+        return profile.AllowedTestDirectories.Any(directory =>
+        {
+            string prefix = directory.Replace('\\', '/').Trim('/');
+            return prefix is "" or "."
+                ? TestNameRegex().IsMatch(normalized)
+                : normalized.StartsWith(prefix + "/", StringComparison.Ordinal);
+        });
+    }
+
+    private static bool IsTextSource(string path) =>
+        !BinaryExtensions.Contains(Path.GetExtension(path)) && !LockFiles.Contains(Path.GetFileName(path));
+
+    private static string Relative(string root, string path) => Path.GetRelativePath(root, path).Replace('\\', '/');
+
+    private static IEnumerable<string> RepositoryFiles(string root)
+    {
+        Stack<string> pending = new([root]);
+        while (pending.Count > 0)
+        {
+            string directory = pending.Pop();
+            foreach (string child in Directory.EnumerateDirectories(directory).Order(StringComparer.Ordinal))
+            {
+                if (!IgnoredDirectories.Contains(Path.GetFileName(child)) && !WorkspacePath.HasLink(root, child))
+                {
+                    pending.Push(child);
+                }
+            }
+
+            foreach (string file in Directory.EnumerateFiles(directory).Order(StringComparer.Ordinal))
+            {
+                if (!WorkspacePath.HasLink(root, file))
+                {
+                    yield return file;
+                }
+            }
+        }
+    }
+
+    private static readonly HashSet<string> IgnoredDirectories = new(StringComparer.Ordinal)
+    {
+        ".git", "node_modules", "bin", "obj", "target", "dist", "build", "vendor", ".venv", "venv", "__pycache__",
+        ".gradle", ".idea", ".vs", "coverage", ".next", ".tox", ".mypy_cache", ".pytest_cache"
+    };
+
+    private static readonly HashSet<string> Manifests = new(StringComparer.Ordinal)
+    {
+        "package.json", "pyproject.toml", "setup.cfg", "setup.py", "pytest.ini", "tox.ini", "requirements-dev.txt",
+        "go.mod", "Cargo.toml", "pom.xml", "build.gradle", "build.gradle.kts", "composer.json", "phpunit.xml",
+        "phpunit.xml.dist", "Gemfile", ".rspec", "mix.exs", "Package.swift", "CMakeLists.txt", "deno.json", "tsconfig.json"
+    };
+
+    private static readonly HashSet<string> LockFiles = new(StringComparer.Ordinal)
+    {
+        "package-lock.json", "yarn.lock", "pnpm-lock.yaml", "poetry.lock", "uv.lock", "Pipfile.lock", "Cargo.lock",
+        "go.sum", "composer.lock", "Gemfile.lock", "packages.lock.json", "mix.lock", "Package.resolved"
+    };
+
+    private static readonly HashSet<string> BinaryExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".png", ".jpg", ".jpeg", ".gif", ".ico", ".webp", ".bmp", ".pdf", ".zip", ".gz", ".tgz", ".tar", ".7z", ".jar",
+        ".war", ".class", ".dll", ".exe", ".so", ".dylib", ".a", ".o", ".pyc", ".woff", ".woff2", ".ttf", ".otf", ".eot",
+        ".mp3", ".mp4", ".mov", ".wav", ".bin", ".snk", ".pfx", ".p12", ".db", ".sqlite"
+    };
 
     private static string Redact(string content) => SecretAssignmentRegex().Replace(content, "$1=[REDACTED]");
+
+    [GeneratedRegex(@"(^|/)(tests?|__tests__|specs?|testing)/|(^|/)test_[^/]*$|[._-](test|tests|spec)\.[^/]+$|Tests?\.[^/.]+$|_test\.go$")]
+    private static partial Regex TestNameRegex();
+
+    [GeneratedRegex(@"^(jest|vitest|playwright|karma|mocha|\.mocharc)(\.config)?\.(js|cjs|mjs|ts|json|ya?ml)$")]
+    private static partial Regex ConfigRegex();
 
     [GeneratedRegex(@"(?m)^\|\s*([A-Z][A-Z0-9]+(?:-[A-Z0-9]+)+)\s*\|")]
     private static partial Regex RequirementIdRegex();

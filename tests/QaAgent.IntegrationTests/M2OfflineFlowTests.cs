@@ -11,7 +11,7 @@ namespace QaAgent.IntegrationTests;
 public sealed class M2OfflineFlowTests
 {
     [Fact]
-    public async Task FakeLlmProducesCompilablePositiveNegativeAndAccessTests()
+    public async Task WrittenCSharpTestsRunWithTheDemoSuite()
     {
         string repo = FindRepository();
         string clone = Path.Combine(Path.GetTempPath(), "qa-m2-clone-" + Guid.NewGuid().ToString("N"));
@@ -25,13 +25,14 @@ public sealed class M2OfflineFlowTests
                 [new ChangedFile("demo/Demo.Web/Program.cs", "M")],
                 await RunAsync(clone, "git", "diff", baseSha, head, "--", "demo/Demo.Web"));
             ProjectProfile profile = new("demo", 2, "demo/docs/specs", ["demo/Demo.Tests"], "revision");
-            M2Result result = await new M2Processor(new FakeLlm("CHANGE-" + head[..12].ToUpperInvariant()),
-                    new M2ContextReader(), new M2TestBuilder(), new DiffSecretScanner())
+            string traceId = "CHANGE-" + head[..12].ToUpperInvariant();
+            M2Result result = await new M2Processor(new FakeLlm(traceId), new M2ContextReader(),
+                    new FakeWriter(traceId), new DiffSecretScanner())
                 .ProcessAsync(snapshot, profile, CancellationToken.None);
 
             Assert.True(result.TestsCompile, result.BuildDiagnostics);
             Assert.Equal(3, result.Tests.Count);
-            string output = await RunAsync(clone, "dotnet", "test", "demo/Demo.Tests/Demo.Tests.csproj", "--no-restore", "-v:q");
+            string output = await RunAsync(clone, "dotnet", "test", "demo/Demo.Tests/Demo.Tests.csproj", "-v:q");
             Assert.Contains("Passed", output);
         }
         finally
@@ -101,29 +102,38 @@ public sealed class M2OfflineFlowTests
                     contextGaps = Array.Empty<string>()
                 }),
                 1 => "{\"findings\":[]}",
-                2 => JsonSerializer.Serialize(new
-                {
-                    tests = new[]
-                    {
-                        Test("Positive", traceId, "positive", "Assert.Equal(System.Net.HttpStatusCode.Created, response.StatusCode);",
-                            "await client.PostAsJsonAsync(\"/api/register\", new RegistrationInput(\"new@example.com\", \"secure-password-123\"))"),
-                        Test("Negative", traceId, "negative", "Assert.Equal(System.Net.HttpStatusCode.BadRequest, response.StatusCode);",
-                            "await client.PostAsJsonAsync(\"/api/register\", new RegistrationInput(\"bad\", \"secure-password-123\"))"),
-                        Test("Access", traceId, "access-control", "Assert.Equal(System.Net.HttpStatusCode.Unauthorized, response.StatusCode);",
-                            "await client.GetAsync(\"/api/me\")")
-                    }
-                }),
                 _ => throw new InvalidOperationException("Unexpected LLM call.")
             };
             return Task.FromResult(new LlmResponse(json, 20, 30));
         }
+    }
 
-        private static object Test(string name, string id, string kind, string assertion, string request) => new
+    // Stands in for the Codex test-writing agent: writes C# files into the checkout the way the agent leaves them.
+    private sealed class FakeWriter(string traceId) : IM2TestWriter
+    {
+        public async Task<TestWritingResult> WriteAsync(TestWritingRequest request, CancellationToken cancellationToken)
         {
-            path = $"demo/Demo.Tests/Generated/{name}.cs",
-            requirementIds = new[] { id },
-            kind,
-            source = $$"""
+            GeneratedTest[] tests =
+            [
+                Test("Positive", "positive", "Assert.Equal(System.Net.HttpStatusCode.Created, response.StatusCode);",
+                    "await client.PostAsJsonAsync(\"/api/register\", new RegistrationInput(\"new@example.com\", \"secure-password-123\"))"),
+                Test("Negative", "negative", "Assert.Equal(System.Net.HttpStatusCode.BadRequest, response.StatusCode);",
+                    "await client.PostAsJsonAsync(\"/api/register\", new RegistrationInput(\"bad\", \"secure-password-123\"))"),
+                Test("Access", "access-control", "Assert.Equal(System.Net.HttpStatusCode.Unauthorized, response.StatusCode);",
+                    "await client.GetAsync(\"/api/me\")")
+            ];
+            foreach (GeneratedTest test in tests)
+            {
+                string path = Path.Combine(request.Snapshot.WorkspacePath, test.Path);
+                Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                await File.WriteAllTextAsync(path, test.Source, cancellationToken);
+            }
+
+            return new TestWritingResult(tests, new TestBuildResult(true, ""), [], 0, 0);
+        }
+
+        private GeneratedTest Test(string name, string kind, string assertion, string httpRequest) => new(
+            $"demo/Demo.Tests/Generated/{name}.cs", [traceId], kind, $$"""
                 using System.Net.Http.Json;
                 using Demo.Web;
                 namespace Demo.Tests;
@@ -134,11 +144,10 @@ public sealed class M2OfflineFlowTests
                     {
                         using DemoWebFactory factory = new();
                         using HttpClient client = factory.CreateClient();
-                        HttpResponseMessage response = {{request}};
+                        HttpResponseMessage response = {{httpRequest}};
                         {{assertion}}
                     }
                 }
-                """
-        };
+                """);
     }
 }

@@ -56,9 +56,15 @@ public sealed class AgentM3Executor(
         foreach (string directory in new[] { "commands", "reports", "coverage" })
             Directory.CreateDirectory(Path.Combine(agentDirectory, directory));
 
+        // Tests written in M2 are untracked, so `git ls-files` in the container would not reveal them.
+        ProcessResult untracked = await ProcessRunner.RunAsync("git",
+            [.. SafeGit, "-C", root, "ls-files", "--others", "--exclude-standard", "-z"], null, cancellationToken);
+        string[] addedFiles = untracked.ExitCode == 0
+            ? untracked.StandardOutput.Split('\0', StringSplitOptions.RemoveEmptyEntries)
+            : [];
         (string? answer, string? agentFailure, int inputTokens, int outputTokens) = await codex.RunAsync(
             root, agentDirectory,
-            AgentTestContract.Prompt(options.Hints, options.AllowDocker, options.CommandTimeoutSeconds),
+            AgentTestContract.Prompt(options.Hints, options.AllowDocker, options.CommandTimeoutSeconds, addedFiles),
             AgentTestContract.Schema, new Dictionary<string, string>(), runId, "Execution", "Test agent", cancellationToken);
 
         List<string> warnings = [];

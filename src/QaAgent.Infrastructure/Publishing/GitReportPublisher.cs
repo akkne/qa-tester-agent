@@ -60,9 +60,7 @@ public sealed class GitReportPublisher(
             foreach (GeneratedTest test in analysis.Tests)
             {
                 string path = test.Path.Replace('\\', '/');
-                if (Path.IsPathRooted(path) || path.Split('/').Any(part => part is "" or "." or "..") ||
-                    !profile.AllowedTestDirectories.Any(dir => path.StartsWith(dir.TrimEnd('/') + "/", StringComparison.Ordinal)) ||
-                    !path.EndsWith(".cs", StringComparison.Ordinal))
+                if (!profile.AllowsTestPath(path) || path.Split('/').Contains(".git", StringComparer.Ordinal))
                     throw new InvalidOperationException("Generated test path is outside the allowed directories.");
                 string fullPath = Path.GetFullPath(Path.Combine(root, path));
                 if (!fullPath.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.Ordinal) ||
