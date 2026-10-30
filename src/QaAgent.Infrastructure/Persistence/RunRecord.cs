@@ -3,6 +3,7 @@ namespace QaAgent.Infrastructure.Persistence;
 public sealed class RunRecord
 {
     public Guid Id { get; set; }
+    public long SessionNumber { get; set; }
     public required string RepositoryId { get; set; }
     public required string BaseSha { get; set; }
     public required string HeadSha { get; set; }

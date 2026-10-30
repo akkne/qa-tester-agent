@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -28,6 +29,7 @@ public static class RunEndpoints
         endpoints.MapGet("/api/runs/{id:guid}", GetRunAsync);
         endpoints.MapGet("/api/runs/{id:guid}/report", GetReportAsync);
         endpoints.MapGet("/runs/{id:guid}", GetRunPageAsync);
+        endpoints.MapGet("/sessions", GetSessionPageAsync);
         endpoints.MapGet("/runs/{id:guid}/activity", GetActivityAsync);
         endpoints.MapGet("/runs/{id:guid}/artifacts/{artifactId}", GetArtifactAsync);
         return endpoints;
@@ -38,6 +40,7 @@ public static class RunEndpoints
         HttpContext context,
         IConfiguration configuration,
         IUnitOfWork unitOfWork,
+        RunDbContext dbContext,
         RunFactory factory,
         CancellationToken cancellationToken)
     {
@@ -102,7 +105,7 @@ public static class RunEndpoints
             !(existing.State == RunState.Completed &&
                 (existing.FinalStatus == RunStatus.Blocked || request.Rerun)))
         {
-            return Accepted(existing, true);
+            return await AcceptedAsync(existing, true, dbContext, cancellationToken);
         }
 
         Run run = factory.Create(Guid.NewGuid(), allowedRepository, baseSha, headSha, profileVersion,
@@ -121,10 +124,10 @@ public static class RunEndpoints
                 throw;
             }
 
-            return Accepted(existing, true);
+            return await AcceptedAsync(existing, true, dbContext, cancellationToken);
         }
 
-        return Accepted(run, false);
+        return await AcceptedAsync(run, false, dbContext, cancellationToken);
     }
 
     private static async Task<IResult> GetRunAsync(
@@ -147,7 +150,7 @@ public static class RunEndpoints
         }
 
         var stored = await dbContext.Runs.Where(record => record.Id == id)
-            .Select(record => new { record.ChangedFilesJson, record.M2ResultJson, record.M3ResultJson, record.M4ResultJson }).SingleAsync(cancellationToken);
+            .Select(record => new { record.SessionNumber, record.ChangedFilesJson, record.M2ResultJson, record.M3ResultJson, record.M4ResultJson }).SingleAsync(cancellationToken);
         IReadOnlyList<ChangedFile>? changedFiles = stored.ChangedFilesJson is null
             ? null
             : JsonSerializer.Deserialize<List<ChangedFile>>(stored.ChangedFilesJson);
@@ -163,6 +166,7 @@ public static class RunEndpoints
         return Results.Ok(new
         {
             run.Id,
+            stored.SessionNumber,
             PageUrl = $"/runs/{run.Id}",
             run.RepositoryId,
             BaseSha = run.BaseSha.Value,
@@ -234,10 +238,10 @@ public static class RunEndpoints
         static string Escape(string? value) => System.Net.WebUtility.HtmlEncode(value ?? "");
         static bool IsWebUrl(string? value) => Uri.TryCreate(value, UriKind.Absolute, out Uri? uri) &&
             (uri.Scheme == Uri.UriSchemeHttps || uri.Scheme == Uri.UriSchemeHttp);
-        StringBuilder html = new("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>QA result</title><style>body{font:16px system-ui,sans-serif;max-width:880px;margin:3rem auto;padding:0 1rem;color:#1b2633}h1{font-size:1.8rem}section{border-top:1px solid #ccd3db;padding:1rem 0}code{overflow-wrap:anywhere}li{margin:.4rem 0}.status{font-weight:700}a{color:#0759a5}.activity{list-style:none;padding:0}.activity li{border:1px solid #ccd3db;border-radius:8px;padding:.7rem;margin:.6rem 0}.activity small{color:#526579}.activity pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:28rem;overflow:auto;margin:.5rem 0 0;font:13px ui-monospace,monospace}</style></head><body>");
-        html.Append("<h1>QA result</h1><p class=\"status\" id=\"run-status\">Status: ").Append(Escape(record.FinalStatus ?? record.State))
-            .Append("</p><p>Run <code>").Append(id).Append("</code> (attempt ").Append(record.Attempt).Append(")</p><p>Range <code>")
-            .Append(Escape(record.BaseSha)).Append(".. ").Append(Escape(record.HeadSha)).Append("</code></p>");
+        StringBuilder html = new("<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>QA result</title><link rel=\"stylesheet\" href=\"/styles.css\"></head><body><main class=\"shell\"><header class=\"site-header\"><a class=\"brand\" href=\"/\">QA Agent</a><a class=\"back-link\" href=\"/\">Find a session</a></header><div class=\"page-heading\"><p class=\"eyebrow\">Session ");
+        html.Append(record.SessionNumber).Append("</p><h1>QA result</h1><p class=\"lede\">Automated analysis and test results for this run.</p></div><div class=\"summary\"><p class=\"status\" id=\"run-status\">Status: ").Append(Escape(record.FinalStatus ?? record.State))
+            .Append("</p><p>Session <strong>").Append(record.SessionNumber).Append("</strong> · Run <code>").Append(id).Append("</code> · Attempt ").Append(record.Attempt).Append("</p><p>Range <code>")
+            .Append(Escape(record.BaseSha)).Append(".. ").Append(Escape(record.HeadSha)).Append("</code></p></div>");
         html.Append("<section><h2>Live agent activity</h2><p id=\"activity-state\">Loading activity…</p><ol class=\"activity\" id=\"activity-list\"></ol></section>");
         if (record.FailureReason is not null) html.Append("<p>Reason: ").Append(Escape(record.FailureReason)).Append("</p>");
         if (record.StartedAt is { } started && record.FinishedAt is { } finished)
@@ -307,9 +311,26 @@ public static class RunEndpoints
                     .Append("\">").Append(Escape(artifact.Name)).Append("</a></li>");
             html.Append("</ul></section>");
         }
-        html.Append("<script>const initialState=").Append(JsonSerializer.Serialize(record.State)).Append(";let next=0;async function updateActivity(){try{const response=await fetch(location.pathname+'/activity?after='+next,{cache:'no-store'});if(!response.ok)throw new Error('HTTP '+response.status);const data=await response.json();const list=document.getElementById('activity-list');for(const entry of data.entries){const row=document.createElement('li');const label=document.createElement('small');label.textContent=new Date(entry.at).toLocaleTimeString()+' · '+entry.stage+' · '+entry.kind;const body=document.createElement('pre');body.textContent=entry.text;row.append(label,body);list.append(row)}next=data.next;document.getElementById('activity-state').textContent=data.state==='Completed'?'Run finished.':'Updates every 3 seconds.';document.getElementById('run-status').textContent='Status: '+(data.finalStatus||data.state);if(initialState!=='Completed'&&data.state==='Completed'){location.reload();return}}catch(error){document.getElementById('activity-state').textContent='Activity temporarily unavailable: '+error.message}setTimeout(updateActivity,3000)}updateActivity()</script></body></html>");
+        html.Append("</main><script>const initialState=").Append(JsonSerializer.Serialize(record.State)).Append(";let next=0;async function updateActivity(){try{const response=await fetch(location.pathname+'/activity?after='+next,{cache:'no-store'});if(!response.ok)throw new Error('HTTP '+response.status);const data=await response.json();const list=document.getElementById('activity-list');for(const entry of data.entries){const row=document.createElement('li');const label=document.createElement('small');label.textContent=new Date(entry.at).toLocaleTimeString()+' · '+entry.stage+' · '+entry.kind;const body=document.createElement('pre');body.textContent=entry.text;row.append(label,body);list.append(row)}next=data.next;document.getElementById('activity-state').textContent=data.state==='Completed'?'Run finished.':'Updates every 3 seconds.';document.getElementById('run-status').textContent='Status: '+(data.finalStatus||data.state);if(initialState!=='Completed'&&data.state==='Completed'){location.reload();return}}catch(error){document.getElementById('activity-state').textContent='Activity temporarily unavailable: '+error.message}setTimeout(updateActivity,3000)}updateActivity()</script></body></html>");
         return Results.Content(html.ToString(), "text/html; charset=utf-8");
     }
+
+    private static async Task<IResult> GetSessionPageAsync(string? number, HttpContext context,
+        IConfiguration configuration, RunDbContext db, CancellationToken cancellationToken)
+    {
+        if (!BrowserAuthorized(context, configuration)) return Challenge(context);
+        if (!long.TryParse(number, NumberStyles.None, CultureInfo.InvariantCulture, out long sessionNumber) || sessionNumber <= 0)
+            return SessionLookupError("Неверный номер сессии", "Введите только цифры из номера сессии.", 400);
+        Guid? id = await db.Runs.AsNoTracking().Where(run => run.SessionNumber == sessionNumber)
+            .Select(run => (Guid?)run.Id).SingleOrDefaultAsync(cancellationToken);
+        return id is null
+            ? SessionLookupError("Сессия не найдена", "Проверьте номер и попробуйте ещё раз.", 404)
+            : Results.Redirect($"/runs/{id}");
+    }
+
+    private static IResult SessionLookupError(string title, string message, int statusCode) =>
+        Results.Content($"<!doctype html><html lang=\"ru\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>{title} — QA Agent</title><link rel=\"stylesheet\" href=\"/styles.css\"></head><body><main class=\"shell\"><header class=\"site-header\"><a class=\"brand\" href=\"/\">QA Agent</a></header><div class=\"page-heading\"><p class=\"eyebrow\">Поиск сессии</p><h1>{title}</h1><p class=\"lede\">{message}</p><p><a href=\"/\">Вернуться к поиску</a></p></div></main></body></html>",
+            "text/html; charset=utf-8", statusCode: statusCode);
 
     private static async Task<IResult> GetActivityAsync(Guid id, int? after, HttpContext context,
         IConfiguration configuration, RunDbContext db, ICodexActivityStore activity, CancellationToken cancellationToken)
@@ -385,9 +406,14 @@ public static class RunEndpoints
         catch (FormatException) { return false; }
     }
 
-    private static IResult Accepted(Run run, bool duplicate) => Results.Accepted(
-        $"/api/runs/{run.Id}",
-        new { RunId = run.Id, run.Attempt, State = run.State.ToString(), ResultUrl = $"/api/runs/{run.Id}", PageUrl = $"/runs/{run.Id}", Duplicate = duplicate });
+    private static async Task<IResult> AcceptedAsync(Run run, bool duplicate, RunDbContext db,
+        CancellationToken cancellationToken)
+    {
+        long sessionNumber = await db.Runs.AsNoTracking().Where(record => record.Id == run.Id)
+            .Select(record => record.SessionNumber).SingleAsync(cancellationToken);
+        return Results.Accepted($"/api/runs/{run.Id}",
+            new { RunId = run.Id, SessionNumber = sessionNumber, run.Attempt, State = run.State.ToString(), ResultUrl = $"/api/runs/{run.Id}", PageUrl = $"/runs/{run.Id}", Duplicate = duplicate });
+    }
 
     private static bool Authorized(HttpContext context, IConfiguration configuration)
     {

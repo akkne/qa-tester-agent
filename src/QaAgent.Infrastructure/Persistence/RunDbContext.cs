@@ -12,6 +12,8 @@ public sealed class RunDbContext(DbContextOptions<RunDbContext> options) : DbCon
         {
             entity.ToTable("runs");
             entity.HasKey(run => run.Id);
+            entity.Property(run => run.SessionNumber).HasDefaultValueSql("nextval('run_session_number_seq')");
+            entity.HasIndex(run => run.SessionNumber).IsUnique();
             entity.Property(run => run.RepositoryId).HasMaxLength(200);
             entity.Property(run => run.BaseSha).HasMaxLength(40);
             entity.Property(run => run.HeadSha).HasMaxLength(40);

@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="QA Agent проверяет изменения в коде, запускает тесты и собирает результаты в одной сессии.">
+  <title>QA Agent — просмотр сессии</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <main class="shell">
+    <header class="site-header">
+      <a class="brand" href="/">QA Agent</a>
+      <span class="header-note">Проверка изменений</span>
+    </header>
+
+    <div class="home-layout">
+      <div class="page-heading">
+        <p class="eyebrow">Результаты проверки</p>
+        <h1>Следите за проверкой кода в одной сессии.</h1>
+        <p class="lede">QA Agent анализирует изменения, подбирает и запускает тесты, а затем собирает результаты и материалы проверки.</p>
+      </div>
+
+      <section class="lookup-card" aria-labelledby="lookup-title">
+        <p class="eyebrow">Открыть сессию</p>
+        <h2 id="lookup-title">Введите номер</h2>
+        <p class="muted">Цифровой номер указан на странице результата и в ответе API при создании запуска.</p>
+        <form action="/sessions" method="get">
+          <label for="session-number">Номер сессии</label>
+          <div class="form-row">
+            <input id="session-number" name="number" type="text" inputmode="numeric" pattern="[0-9]+" autocomplete="off" placeholder="Например, 100000" required autofocus>
+            <button type="submit">Открыть</button>
+          </div>
+        </form>
+      </section>
+    </div>
+  </main>
+</body>
+</html>

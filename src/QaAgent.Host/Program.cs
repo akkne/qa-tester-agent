@@ -39,6 +39,8 @@ if (pipelineConfigured)
 }
 
 WebApplication app = builder.Build();
+app.UseDefaultFiles();
+app.UseStaticFiles();
 if (pipelineConfigured)
 {
     using IServiceScope scope = app.Services.CreateScope();
